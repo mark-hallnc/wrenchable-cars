@@ -1,10 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabaseClient'
 import './App.css'
-
-const years = ['2011', '2012', '2015', '2018']
-const makes = ['GMC', 'Toyota', 'Ford', 'Honda', 'Chevrolet']
-const models = ['Acadia', 'Camry', 'F-150', 'Pilot', 'Silverado']
 
 const scoreClass = (score) => {
   const numericScore = Number(score)
@@ -22,12 +18,129 @@ const formatScore = (score) => {
   return numericScore.toFixed(1).replace('.0', '')
 }
 
+const getUniqueYears = (vehicles) =>
+  [...new Set(vehicles.map((vehicle) => vehicle.year))]
+    .filter((year) => year !== null && year !== undefined)
+    .sort((a, b) => Number(b) - Number(a))
+    .map(String)
+
+const getUniqueMakes = (vehicles, year) =>
+  [
+    ...new Set(
+      vehicles
+        .filter((vehicle) => String(vehicle.year) === String(year))
+        .map((vehicle) => vehicle.make),
+    ),
+  ]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+
+const getUniqueModels = (vehicles, year, make) =>
+  [
+    ...new Set(
+      vehicles
+        .filter(
+          (vehicle) =>
+            String(vehicle.year) === String(year) && vehicle.make === make,
+        )
+        .map((vehicle) => vehicle.model),
+    ),
+  ]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b))
+
 function App() {
   const [selectedYear, setSelectedYear] = useState('2011')
   const [selectedMake, setSelectedMake] = useState('GMC')
   const [selectedModel, setSelectedModel] = useState('Acadia')
+  const [vehicles, setVehicles] = useState([])
+  const [vehicleOptionsStatus, setVehicleOptionsStatus] = useState('loading')
   const [status, setStatus] = useState('idle')
   const [result, setResult] = useState(null)
+
+  useEffect(() => {
+    const loadVehicles = async () => {
+      setVehicleOptionsStatus('loading')
+
+      try {
+        if (!supabase) {
+          throw new Error('Supabase is not configured.')
+        }
+
+        const { data, error } = await supabase
+          .from('vehicles')
+          .select('id, year, make, model, trim, engine')
+
+        if (error) throw error
+
+        const loadedVehicles = data ?? []
+        const yearOptions = getUniqueYears(loadedVehicles)
+        const firstYear = yearOptions[0] ?? ''
+        const makeOptions = getUniqueMakes(loadedVehicles, firstYear)
+        const firstMake = makeOptions[0] ?? ''
+        const modelOptions = getUniqueModels(loadedVehicles, firstYear, firstMake)
+        const firstModel = modelOptions[0] ?? ''
+
+        setVehicles(loadedVehicles)
+
+        if (firstYear) {
+          setSelectedYear(firstYear)
+          setSelectedMake(firstMake)
+          setSelectedModel(firstModel)
+        }
+
+        setVehicleOptionsStatus('loaded')
+      } catch (error) {
+        console.error('Error loading available vehicles:', error)
+        setVehicles([])
+        setVehicleOptionsStatus('loaded')
+      }
+    }
+
+    loadVehicles()
+  }, [])
+
+  const yearOptions = useMemo(() => getUniqueYears(vehicles), [vehicles])
+  const makeOptions = useMemo(
+    () => getUniqueMakes(vehicles, selectedYear),
+    [vehicles, selectedYear],
+  )
+  const modelOptions = useMemo(
+    () => getUniqueModels(vehicles, selectedYear, selectedMake),
+    [vehicles, selectedYear, selectedMake],
+  )
+
+  const hasVehicleOptions = vehicles.length > 0
+  const isLoadingVehicleOptions = vehicleOptionsStatus === 'loading'
+
+  const handleYearChange = (event) => {
+    const nextYear = event.target.value
+    const nextMakes = getUniqueMakes(vehicles, nextYear)
+    const nextMake = nextMakes[0] ?? ''
+    const nextModels = getUniqueModels(vehicles, nextYear, nextMake)
+
+    setSelectedYear(nextYear)
+    setSelectedMake(nextMake)
+    setSelectedModel(nextModels[0] ?? '')
+    setResult(null)
+    setStatus('idle')
+  }
+
+  const handleMakeChange = (event) => {
+    const nextMake = event.target.value
+    const nextModels = getUniqueModels(vehicles, selectedYear, nextMake)
+
+    setSelectedMake(nextMake)
+    setSelectedModel(nextModels[0] ?? '')
+    setResult(null)
+    setStatus('idle')
+  }
+
+  const handleModelChange = (event) => {
+    setSelectedModel(event.target.value)
+    setResult(null)
+    setStatus('idle')
+  }
 
   const handleSubmit = async (event) => {
     event.preventDefault()
@@ -151,8 +264,12 @@ function App() {
             <div className="form-grid">
               <label>
                 Year
-                <select value={selectedYear} onChange={(event) => setSelectedYear(event.target.value)}>
-                  {years.map((year) => (
+                <select
+                  value={selectedYear}
+                  onChange={handleYearChange}
+                  disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                >
+                  {yearOptions.map((year) => (
                     <option key={year} value={year}>
                       {year}
                     </option>
@@ -162,8 +279,12 @@ function App() {
 
               <label>
                 Make
-                <select value={selectedMake} onChange={(event) => setSelectedMake(event.target.value)}>
-                  {makes.map((make) => (
+                <select
+                  value={selectedMake}
+                  onChange={handleMakeChange}
+                  disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                >
+                  {makeOptions.map((make) => (
                     <option key={make} value={make}>
                       {make}
                     </option>
@@ -173,8 +294,12 @@ function App() {
 
               <label>
                 Model
-                <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}>
-                  {models.map((model) => (
+                <select
+                  value={selectedModel}
+                  onChange={handleModelChange}
+                  disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                >
+                  {modelOptions.map((model) => (
                     <option key={model} value={model}>
                       {model}
                     </option>
@@ -183,9 +308,15 @@ function App() {
               </label>
             </div>
 
-            <button type="submit" disabled={status === 'loading'}>
+            <button type="submit" disabled={status === 'loading' || !hasVehicleOptions}>
               {status === 'loading' ? 'Checking Wrenchability...' : 'Check Wrenchability'}
             </button>
+            {isLoadingVehicleOptions && (
+              <p className="helper-text notice">Loading available vehicles...</p>
+            )}
+            {!isLoadingVehicleOptions && !hasVehicleOptions && (
+              <p className="helper-text notice">No vehicle data has been loaded yet.</p>
+            )}
             <p className="helper-text">
               Start with the seeded 2011 GMC Acadia, then try other vehicles as data is added.
             </p>
