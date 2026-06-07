@@ -1,49 +1,122 @@
 import { useState } from 'react'
+import { supabase } from './lib/supabaseClient'
 import './App.css'
 
 const years = ['2011', '2012', '2015', '2018']
 const makes = ['GMC', 'Toyota', 'Ford', 'Honda', 'Chevrolet']
 const models = ['Acadia', 'Camry', 'F-150', 'Pilot', 'Silverado']
 
-const repairs = [
-  { name: 'Headlight bulb replacement', hours: 1.4, score: 2, label: 'Wrench Nightmare' },
-  { name: 'Water pump replacement', hours: 3.2, score: 4, label: 'Hard' },
-  { name: 'Alternator replacement', hours: 2.8, score: 4, label: 'Hard' },
-  { name: 'Starter replacement', hours: 2.4, score: 5, label: 'Moderate' },
-  { name: 'Front brake pads and rotors', hours: 1.5, score: 8, label: 'DIY Friendly' },
-  { name: 'Rear brake pads and rotors', hours: 1.6, score: 7, label: 'DIY Friendly' },
-  { name: 'Battery replacement', hours: 0.5, score: 9, label: 'Easy' },
-  { name: 'Spark plug replacement', hours: 2.2, score: 5, label: 'Moderate' },
-  { name: 'Ignition coil replacement', hours: 1.8, score: 6, label: 'Moderate' },
-  { name: 'Thermostat replacement', hours: 2.0, score: 5, label: 'Moderate' },
-  { name: 'Radiator replacement', hours: 2.6, score: 4, label: 'Hard' },
-  { name: 'Serpentine belt replacement', hours: 0.8, score: 8, label: 'DIY Friendly' },
-  { name: 'Belt tensioner replacement', hours: 1.2, score: 7, label: 'DIY Friendly' },
-  { name: 'Headlight assembly replacement', hours: 1.8, score: 3, label: 'Hard' },
-  { name: 'Tail light bulb replacement', hours: 0.3, score: 10, label: 'Easy' },
-  { name: 'Wheel bearing/hub replacement', hours: 2.1, score: 5, label: 'Moderate' },
-  { name: 'Front strut replacement', hours: 2.4, score: 5, label: 'Moderate' },
-  { name: 'Control arm replacement', hours: 2.0, score: 6, label: 'Moderate' },
-  { name: 'Fuel pump replacement', hours: 3.5, score: 3, label: 'Hard' },
-  { name: 'Blower motor replacement', hours: 1.7, score: 6, label: 'Moderate' },
-]
-
 const scoreClass = (score) => {
-  if (score <= 3) return 'low'
-  if (score <= 6) return 'mid'
+  const numericScore = Number(score)
+
+  if (numericScore <= 3) return 'low'
+  if (numericScore <= 6) return 'mid'
   return 'high'
+}
+
+const formatScore = (score) => {
+  const numericScore = Number(score)
+
+  if (!Number.isFinite(numericScore)) return 'Pending'
+
+  return numericScore.toFixed(1).replace('.0', '')
 }
 
 function App() {
   const [selectedYear, setSelectedYear] = useState('2011')
   const [selectedMake, setSelectedMake] = useState('GMC')
   const [selectedModel, setSelectedModel] = useState('Acadia')
-  const [hasSearched, setHasSearched] = useState(false)
+  const [status, setStatus] = useState('idle')
+  const [result, setResult] = useState(null)
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault()
-    setHasSearched(true)
+    setStatus('loading')
+    setResult(null)
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data: vehicle, error: vehicleError } = await supabase
+        .from('vehicles')
+        .select('id, year, make, model, trim, engine, generation')
+        .eq('year', Number(selectedYear))
+        .eq('make', selectedMake)
+        .eq('model', selectedModel)
+        .maybeSingle()
+
+      if (vehicleError) throw vehicleError
+
+      if (!vehicle) {
+        setStatus('not-found')
+        return
+      }
+
+      const [vehicleScoreResponse, repairScoresResponse] = await Promise.all([
+        supabase
+          .from('vehicle_scores')
+          .select('id, overall_score, score_label, verdict, calculated_at')
+          .eq('vehicle_id', vehicle.id)
+          .maybeSingle(),
+        supabase
+          .from('repair_scores')
+          .select(
+            'id, repair_task_id, labor_hours, wrenchability_score, score_label, explanation',
+          )
+          .eq('vehicle_id', vehicle.id),
+      ])
+
+      if (vehicleScoreResponse.error) throw vehicleScoreResponse.error
+      if (repairScoresResponse.error) throw repairScoresResponse.error
+
+      const repairScores = repairScoresResponse.data ?? []
+      const repairTaskIds = [...new Set(repairScores.map((repair) => repair.repair_task_id))]
+
+      const { data: repairTasks, error: repairTasksError } = repairTaskIds.length
+        ? await supabase
+            .from('repair_tasks')
+            .select('id, name, category, display_order')
+            .in('id', repairTaskIds)
+        : { data: [], error: null }
+
+      if (repairTasksError) throw repairTasksError
+
+      const tasksById = new Map(repairTasks.map((task) => [task.id, task]))
+      const repairs = repairScores
+        .map((repair) => {
+          const task = tasksById.get(repair.repair_task_id)
+
+          return {
+            id: repair.id,
+            name: task?.name ?? 'Unknown repair task',
+            category: task?.category ?? '',
+            displayOrder: task?.display_order ?? 999,
+            hours: repair.labor_hours,
+            score: repair.wrenchability_score,
+            label: repair.score_label,
+            explanation: repair.explanation,
+          }
+        })
+        .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
+
+      setResult({
+        vehicle,
+        vehicleScore: vehicleScoreResponse.data,
+        repairs,
+      })
+      setStatus('success')
+    } catch (error) {
+      console.error('Error loading Wrenchability data:', error)
+      setStatus('error')
+    }
   }
+
+  const hasResultsState = status !== 'idle'
+  const vehicleTitle = result
+    ? `${result.vehicle.year} ${result.vehicle.make} ${result.vehicle.model}`
+    : `${selectedYear} ${selectedMake} ${selectedModel}`
 
   return (
     <div className="app-shell">
@@ -110,69 +183,103 @@ function App() {
               </label>
             </div>
 
-            <button type="submit">Check Wrenchability</button>
+            <button type="submit" disabled={status === 'loading'}>
+              {status === 'loading' ? 'Checking Wrenchability...' : 'Check Wrenchability'}
+            </button>
             <p className="helper-text">
-              MVP preview: every search currently returns the 2011 GMC Acadia mock result.
+              Start with the seeded 2011 GMC Acadia, then try other vehicles as data is added.
             </p>
           </form>
         </section>
 
-        {hasSearched && (
+        {hasResultsState && (
           <section className="results-section" aria-live="polite">
-            <div className="section-heading">
-              <p className="eyebrow">Mock result</p>
-              <h2>2011 GMC Acadia</h2>
-            </div>
+            {status === 'loading' && (
+              <article className="status-card">Checking Wrenchability...</article>
+            )}
 
-            <article className="result-card">
-              <div className="result-summary">
-                <div>
-                  <span className="meta-label">Vehicle</span>
-                  <h3>2011 GMC Acadia</h3>
+            {status === 'error' && (
+              <article className="status-card error">
+                Something went wrong loading vehicle data.
+              </article>
+            )}
+
+            {status === 'not-found' && (
+              <article className="status-card">
+                We do not have Wrenchability data for that vehicle yet.
+              </article>
+            )}
+
+            {status === 'success' && result && (
+              <>
+                <div className="section-heading">
+                  <p className="eyebrow">Vehicle result</p>
+                  <h2>{vehicleTitle}</h2>
                 </div>
-                <div className="score-badge">
-                  <span>Overall Wrenchability Score</span>
-                  <strong>3.8 / 10</strong>
-                  <em>Hard to Wrench</em>
+
+                <article className="result-card">
+                  <div className="result-summary">
+                    <div>
+                      <span className="meta-label">Vehicle</span>
+                      <h3>{vehicleTitle}</h3>
+                    </div>
+                    <div className="score-badge">
+                      <span>Overall Wrenchability Score</span>
+                      <strong>
+                        {result.vehicleScore
+                          ? `${formatScore(result.vehicleScore.overall_score)} / 10`
+                          : 'Pending'}
+                      </strong>
+                      {result.vehicleScore?.score_label && (
+                        <em>{result.vehicleScore.score_label}</em>
+                      )}
+                    </div>
+                  </div>
+                  <p>
+                    {result.vehicleScore?.verdict ??
+                      'Wrenchability data is available, but the overall verdict is still pending.'}
+                  </p>
+                </article>
+
+                <div className="repairs-panel">
+                  <div className="section-heading compact">
+                    <p className="eyebrow">Top common ownership repairs</p>
+                    <h2>Repair difficulty snapshot</h2>
+                  </div>
+
+                  <div className="repair-list">
+                    {result.repairs.map((repair) => (
+                      <article className="repair-row" key={repair.id}>
+                        <div className="repair-main">
+                          <h3>{repair.name}</h3>
+                          <span>{Number(repair.hours).toFixed(1)} labor hours</span>
+                          {repair.category && <p className="repair-detail">{repair.category}</p>}
+                          {repair.explanation && (
+                            <p className="repair-detail">{repair.explanation}</p>
+                          )}
+                        </div>
+                        <div className="repair-score">
+                          <div className="score-line">
+                            <strong>{formatScore(repair.score)} / 10</strong>
+                            <span className={`label-pill ${scoreClass(repair.score)}`}>
+                              {repair.label}
+                            </span>
+                          </div>
+                          <div className="meter" aria-label={`${repair.score} out of 10`}>
+                            <span
+                              className={scoreClass(repair.score)}
+                              style={{
+                                width: `${Math.max(0, Math.min(Number(repair.score), 10)) * 10}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <p>
-                This vehicle has several common repairs with above-average labor
-                time. Good to know before buying one cheap.
-              </p>
-            </article>
-
-            <div className="repairs-panel">
-              <div className="section-heading compact">
-                <p className="eyebrow">Top 20 common ownership repairs</p>
-                <h2>Repair difficulty snapshot</h2>
-              </div>
-
-              <div className="repair-list">
-                {repairs.map((repair) => (
-                  <article className="repair-row" key={repair.name}>
-                    <div className="repair-main">
-                      <h3>{repair.name}</h3>
-                      <span>{repair.hours.toFixed(1)} labor hours</span>
-                    </div>
-                    <div className="repair-score">
-                      <div className="score-line">
-                        <strong>{repair.score} / 10</strong>
-                        <span className={`label-pill ${scoreClass(repair.score)}`}>
-                          {repair.label}
-                        </span>
-                      </div>
-                      <div className="meter" aria-label={`${repair.score} out of 10`}>
-                        <span
-                          className={scoreClass(repair.score)}
-                          style={{ width: `${repair.score * 10}%` }}
-                        />
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
+              </>
+            )}
           </section>
         )}
 

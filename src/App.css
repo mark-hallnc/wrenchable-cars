@@ -177,6 +177,12 @@ button:hover {
   transform: translateY(-1px);
 }
 
+button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+  transform: none;
+}
+
 .helper-text {
   margin: 0.9rem 0 0;
   color: #667789;
@@ -198,6 +204,23 @@ button:hover {
 
 .result-card {
   padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+.status-card {
+  border: 1px solid #dde5ec;
+  border-radius: 8px;
+  padding: clamp(1.25rem, 3vw, 2rem);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 24px 60px rgba(17, 27, 39, 0.1);
+  color: #334256;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.status-card.error {
+  border-color: #f1b8b2;
+  background: #fff7f6;
+  color: #9a2f26;
 }
 
 .result-summary {
@@ -282,6 +305,13 @@ button:hover {
 .repair-main {
   display: grid;
   gap: 0.35rem;
+}
+
+.repair-detail {
+  margin: 0;
+  color: #667789;
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .repair-row h3 {
