@@ -11,7 +11,8 @@
     "test:openlabor": "node scripts/test-openlabor.js",
     "import:openlabor": "node scripts/import-openlabor-vehicle.js",
     "import:openlabor:queue": "node scripts/run-openlabor-queue.js",
-    "seed:openlabor:queue": "node scripts/seed-openlabor-queue.js"
+    "seed:openlabor:queue": "node scripts/seed-openlabor-queue.js",
+    "recalculate:scores": "node scripts/recalculate-wrenchability-scores.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",
