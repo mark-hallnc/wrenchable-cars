@@ -152,12 +152,24 @@ select {
   font: inherit;
 }
 
+input {
+  width: 100%;
+  min-height: 3rem;
+  border: 1px solid #cbd6df;
+  border-radius: 6px;
+  padding: 0 0.85rem;
+  background: #ffffff;
+  color: #111b27;
+  font: inherit;
+}
+
 select:disabled {
   cursor: not-allowed;
   opacity: 0.72;
 }
 
 select:focus,
+input:focus,
 button:focus-visible {
   outline: 3px solid rgba(47, 111, 124, 0.24);
   outline-offset: 2px;
@@ -296,9 +308,61 @@ button:disabled {
   padding: clamp(1rem, 3vw, 1.5rem);
 }
 
+.repair-controls {
+  display: grid;
+  gap: 1rem;
+  margin: 1rem 0 0.85rem;
+}
+
+.filter-button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.filter-button-group button {
+  width: auto;
+  min-height: 2.55rem;
+  border: 1px solid #cbd6df;
+  padding: 0 0.85rem;
+  background: #ffffff;
+  color: #334256;
+  font-size: 0.86rem;
+}
+
+.filter-button-group button:hover,
+.filter-button-group button.active {
+  border-color: #2f6f7c;
+  background: #e8f3f5;
+  color: #183b43;
+}
+
+.repair-control-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(220px, 1fr);
+  gap: 0.85rem;
+  align-items: end;
+}
+
+.repair-summary {
+  margin: 0 0 0.75rem;
+  color: #405064;
+  font-size: 0.94rem;
+  font-weight: 800;
+}
+
 .repair-list {
   display: grid;
   gap: 0.7rem;
+}
+
+.empty-repairs {
+  border: 1px dashed #cbd6df;
+  border-radius: 8px;
+  padding: 1rem;
+  background: #f8fafc;
+  color: #667789;
+  font-weight: 800;
 }
 
 .repair-row {
@@ -432,6 +496,7 @@ button:disabled {
   }
 
   .repair-row,
+  .repair-control-row,
   .info-grid {
     grid-template-columns: 1fr;
   }
@@ -453,8 +518,17 @@ button:disabled {
   .result-card,
   .repairs-panel,
   .info-grid article,
-  .repair-row {
+  .repair-row,
+  .empty-repairs {
     border-radius: 6px;
+  }
+
+  .filter-button-group {
+    display: grid;
+  }
+
+  .filter-button-group button {
+    width: 100%;
   }
 
   .label-pill {
