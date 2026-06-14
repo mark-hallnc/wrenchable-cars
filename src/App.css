@@ -64,6 +64,7 @@
 
 .hero-section,
 .results-section,
+.rankings-section,
 .how-section {
   width: min(1120px, calc(100% - 2rem));
   margin: 0 auto;
@@ -106,8 +107,10 @@
 }
 
 .search-panel,
+.rankings-panel,
 .result-card,
 .repairs-panel,
+.ranking-card,
 .info-grid article {
   border: 1px solid #dde5ec;
   border-radius: 8px;
@@ -116,6 +119,40 @@
 }
 
 .search-panel {
+  padding: clamp(1.25rem, 3vw, 2rem);
+}
+
+.view-workspace {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.view-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.45rem;
+  border: 1px solid #d6e0e8;
+  border-radius: 8px;
+  padding: 0.35rem;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.view-tabs button {
+  min-height: 2.7rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #334256;
+  font-size: 0.9rem;
+}
+
+.view-tabs button:hover,
+.view-tabs button.active {
+  border-color: #2f6f7c;
+  background: #e8f3f5;
+  color: #183b43;
+}
+
+.rankings-panel {
   padding: clamp(1.25rem, 3vw, 2rem);
 }
 
@@ -214,6 +251,10 @@ button:disabled {
 
 .results-section {
   padding: 0 0 clamp(3rem, 7vw, 5rem);
+}
+
+.rankings-section {
+  padding: 0 0 1.5rem;
 }
 
 .section-heading {
@@ -349,6 +390,93 @@ button:disabled {
   color: #405064;
   font-size: 0.94rem;
   font-weight: 800;
+}
+
+.ranking-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-top: 1.2rem;
+}
+
+.ranking-card-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.ranking-card {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr) minmax(220px, 0.45fr);
+  gap: 1rem;
+  align-items: center;
+  padding: 1rem;
+  background: #ffffff;
+}
+
+.rank-number {
+  display: grid;
+  width: 3.25rem;
+  height: 3.25rem;
+  place-items: center;
+  border-radius: 8px;
+  font-weight: 900;
+}
+
+.rank-number.low {
+  background: #ffe2df;
+  color: #9a2f26;
+}
+
+.rank-number.mid {
+  background: #fff0cc;
+  color: #775311;
+}
+
+.rank-number.high {
+  background: #dff5e6;
+  color: #1f6a3d;
+}
+
+.ranking-card-main {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.ranking-card-main h3 {
+  margin: 0;
+  color: #111b27;
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+}
+
+.ranking-card-main p {
+  margin: 0;
+  color: #667789;
+  line-height: 1.45;
+}
+
+.ranking-card-score {
+  display: grid;
+  gap: 0.35rem;
+  align-items: start;
+}
+
+.ranking-card-score span,
+.ranking-card-score em {
+  color: #667789;
+  font-size: 0.85rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.ranking-card-score strong {
+  color: #111b27;
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.ranking-card-score button {
+  min-height: 2.65rem;
+  margin-top: 0.25rem;
 }
 
 .repair-list {
@@ -497,7 +625,12 @@ button:disabled {
 
   .repair-row,
   .repair-control-row,
+  .ranking-card,
   .info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ranking-controls {
     grid-template-columns: 1fr;
   }
 }
@@ -510,17 +643,24 @@ button:disabled {
 
   .hero-section,
   .results-section,
+  .rankings-section,
   .how-section {
     width: min(100% - 1rem, 1120px);
   }
 
   .search-panel,
+  .rankings-panel,
   .result-card,
   .repairs-panel,
+  .ranking-card,
   .info-grid article,
   .repair-row,
   .empty-repairs {
     border-radius: 6px;
+  }
+
+  .view-tabs {
+    grid-template-columns: 1fr;
   }
 
   .filter-button-group {

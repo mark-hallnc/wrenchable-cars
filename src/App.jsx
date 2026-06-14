@@ -80,6 +80,14 @@ const REPAIR_SORT_MODES = [
   { value: 'name-asc', label: 'Repair Name: A to Z' },
 ]
 
+const RANKING_TYPES = [
+  { value: 'top', label: 'Top Easiest' },
+  { value: 'bottom', label: 'Bottom Hardest' },
+  { value: 'all', label: 'All Ranked' },
+]
+
+const RANKING_LIMITS = ['10', '25', '50', '100']
+
 const normalizeText = (value) => String(value ?? '').trim().toLowerCase()
 
 const getRepairTask = (repair) =>
@@ -233,6 +241,52 @@ const getFilteredAndSortedRepairs = (repairs, viewFilter, sortMode, searchText) 
     .slice(0, shouldLimit ? 20 : undefined)
 }
 
+const getVehicleTitle = (vehicle) =>
+  [vehicle?.year, vehicle?.make, vehicle?.model].filter(Boolean).join(' ')
+
+const getVehicleScoreValue = (vehicle) => Number(vehicle?.vehicleScore?.overall_score)
+
+const getRankedVehicles = (vehicles, filters) => {
+  const normalizedSearch = normalizeText(filters.searchText)
+  const minYear = Number(filters.minYear)
+  const maxYear = Number(filters.maxYear)
+  const minScore = Number(filters.minScore)
+  const maxScore = Number(filters.maxScore)
+
+  return vehicles
+    .filter((vehicle) => {
+      const year = Number(vehicle.year)
+      const score = getVehicleScoreValue(vehicle)
+
+      if (filters.rankingType !== 'all' && !Number.isFinite(score)) return false
+      if (Number.isFinite(minYear) && year < minYear) return false
+      if (Number.isFinite(maxYear) && year > maxYear) return false
+      if (filters.make !== 'all' && vehicle.make !== filters.make) return false
+      if (Number.isFinite(minScore) && (!Number.isFinite(score) || score < minScore)) return false
+      if (Number.isFinite(maxScore) && (!Number.isFinite(score) || score > maxScore)) return false
+
+      if (!normalizedSearch) return true
+
+      return [vehicle.make, vehicle.model, vehicle.engine]
+        .map(normalizeText)
+        .some((value) => value.includes(normalizedSearch))
+    })
+    .sort((first, second) => {
+      const direction = filters.rankingType === 'bottom' ? 'asc' : 'desc'
+
+      return (
+        compareFiniteNumbers(
+          getVehicleScoreValue(first),
+          getVehicleScoreValue(second),
+          direction,
+        ) ||
+        Number(second.year) - Number(first.year) ||
+        getVehicleTitle(first).localeCompare(getVehicleTitle(second))
+      )
+    })
+    .slice(0, Number(filters.limit))
+}
+
 const getUniqueYears = (vehicles) =>
   [...new Set(vehicles.map((vehicle) => vehicle.year))]
     .filter((year) => year !== null && year !== undefined)
@@ -265,16 +319,27 @@ const getUniqueModels = (vehicles, year, make) =>
     .sort((a, b) => a.localeCompare(b))
 
 function App() {
+  const [activeView, setActiveView] = useState('search')
   const [selectedYear, setSelectedYear] = useState('2011')
   const [selectedMake, setSelectedMake] = useState('GMC')
   const [selectedModel, setSelectedModel] = useState('Acadia')
   const [vehicles, setVehicles] = useState([])
+  const [rankedVehicles, setRankedVehicles] = useState([])
+  const [rankingsStatus, setRankingsStatus] = useState('idle')
   const [vehicleOptionsStatus, setVehicleOptionsStatus] = useState('loading')
   const [status, setStatus] = useState('idle')
   const [result, setResult] = useState(null)
   const [repairViewFilter, setRepairViewFilter] = useState('top-ownership')
   const [repairSortMode, setRepairSortMode] = useState('recommended')
   const [repairSearchText, setRepairSearchText] = useState('')
+  const [rankingType, setRankingType] = useState('top')
+  const [rankingLimit, setRankingLimit] = useState('10')
+  const [rankingMinYear, setRankingMinYear] = useState('')
+  const [rankingMaxYear, setRankingMaxYear] = useState('')
+  const [rankingMake, setRankingMake] = useState('all')
+  const [rankingSearchText, setRankingSearchText] = useState('')
+  const [rankingMinScore, setRankingMinScore] = useState('')
+  const [rankingMaxScore, setRankingMaxScore] = useState('')
 
   useEffect(() => {
     const loadVehicles = async () => {
@@ -318,6 +383,58 @@ function App() {
     loadVehicles()
   }, [])
 
+  useEffect(() => {
+    const loadRankings = async () => {
+      if (vehicleOptionsStatus !== 'loaded' || vehicles.length === 0) {
+        setRankedVehicles([])
+        setRankingsStatus(vehicleOptionsStatus === 'loading' ? 'loading' : 'loaded')
+        return
+      }
+
+      setRankingsStatus('loading')
+
+      try {
+        if (!supabase) {
+          throw new Error('Supabase is not configured.')
+        }
+
+        const [scoresResponse, repairCountsResponse] = await Promise.all([
+          supabase
+            .from('vehicle_scores')
+            .select('vehicle_id, overall_score, score_label, verdict'),
+          supabase.from('repair_scores').select('vehicle_id'),
+        ])
+
+        if (scoresResponse.error) throw scoresResponse.error
+        if (repairCountsResponse.error) throw repairCountsResponse.error
+
+        const scoresByVehicleId = new Map(
+          (scoresResponse.data ?? []).map((score) => [score.vehicle_id, score]),
+        )
+        const repairCountsByVehicleId = (repairCountsResponse.data ?? []).reduce(
+          (counts, repair) =>
+            counts.set(repair.vehicle_id, (counts.get(repair.vehicle_id) ?? 0) + 1),
+          new Map(),
+        )
+
+        setRankedVehicles(
+          vehicles.map((vehicle) => ({
+            ...vehicle,
+            vehicleScore: scoresByVehicleId.get(vehicle.id) ?? null,
+            repairCount: repairCountsByVehicleId.get(vehicle.id) ?? 0,
+          })),
+        )
+        setRankingsStatus('loaded')
+      } catch (error) {
+        console.error('Error loading vehicle rankings:', error)
+        setRankedVehicles([])
+        setRankingsStatus('error')
+      }
+    }
+
+    loadRankings()
+  }, [vehicleOptionsStatus, vehicles])
+
   const yearOptions = useMemo(() => getUniqueYears(vehicles), [vehicles])
   const makeOptions = useMemo(
     () => getUniqueMakes(vehicles, selectedYear),
@@ -360,26 +477,36 @@ function App() {
     setStatus('idle')
   }
 
-  const handleSubmit = async (event) => {
-    event.preventDefault()
-    setStatus('loading')
-    setResult(null)
+  const resetRepairControls = () => {
     setRepairViewFilter('top-ownership')
     setRepairSortMode('recommended')
     setRepairSearchText('')
+  }
+
+  const loadVehicleDetails = async (vehicleLookup) => {
+    setStatus('loading')
+    setResult(null)
+    resetRepairControls()
 
     try {
       if (!supabase) {
         throw new Error('Supabase is not configured.')
       }
 
-      const { data: vehicle, error: vehicleError } = await supabase
+      let vehicleQuery = supabase
         .from('vehicles')
         .select('id, year, make, model, trim, engine, generation')
-        .eq('year', Number(selectedYear))
-        .eq('make', selectedMake)
-        .eq('model', selectedModel)
-        .maybeSingle()
+
+      if (vehicleLookup.id) {
+        vehicleQuery = vehicleQuery.eq('id', vehicleLookup.id)
+      } else {
+        vehicleQuery = vehicleQuery
+          .eq('year', Number(vehicleLookup.year))
+          .eq('make', vehicleLookup.make)
+          .eq('model', vehicleLookup.model)
+      }
+
+      const { data: vehicle, error: vehicleError } = await vehicleQuery.maybeSingle()
 
       if (vehicleError) throw vehicleError
 
@@ -449,10 +576,69 @@ function App() {
     }
   }
 
+  const handleSubmit = async (event) => {
+    event.preventDefault()
+    await loadVehicleDetails({
+      year: selectedYear,
+      make: selectedMake,
+      model: selectedModel,
+    })
+  }
+
+  const handleRankingDetailsClick = async (vehicle) => {
+    setActiveView('search')
+    setSelectedYear(String(vehicle.year ?? ''))
+    setSelectedMake(vehicle.make ?? '')
+    setSelectedModel(vehicle.model ?? '')
+    await loadVehicleDetails(vehicle)
+  }
+
   const hasResultsState = status !== 'idle'
   const vehicleTitle = result
     ? `${result.vehicle.year} ${result.vehicle.make} ${result.vehicle.model}`
     : `${selectedYear} ${selectedMake} ${selectedModel}`
+  const rankingMakeOptions = useMemo(
+    () => [...new Set(rankedVehicles.map((vehicle) => vehicle.make))]
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b)),
+    [rankedVehicles],
+  )
+  const rankingFilters = useMemo(
+    () => ({
+      rankingType,
+      limit: rankingLimit,
+      minYear: rankingMinYear,
+      maxYear: rankingMaxYear,
+      make: rankingMake,
+      searchText: rankingSearchText,
+      minScore: rankingMinScore,
+      maxScore: rankingMaxScore,
+    }),
+    [
+      rankingLimit,
+      rankingMake,
+      rankingMaxScore,
+      rankingMaxYear,
+      rankingMinScore,
+      rankingMinYear,
+      rankingSearchText,
+      rankingType,
+    ],
+  )
+  const visibleRankedVehicles = useMemo(
+    () => getRankedVehicles(rankedVehicles, rankingFilters),
+    [rankedVehicles, rankingFilters],
+  )
+  const hasRankedScores = rankedVehicles.some((vehicle) =>
+    Number.isFinite(getVehicleScoreValue(vehicle)),
+  )
+  const rankingsAreFiltered =
+    rankingMinYear ||
+    rankingMaxYear ||
+    rankingMake !== 'all' ||
+    rankingSearchText ||
+    rankingMinScore ||
+    rankingMaxScore
   const visibleRepairs = useMemo(
     () =>
       getFilteredAndSortedRepairs(
@@ -505,75 +691,281 @@ function App() {
             </p>
           </div>
 
-          <form className="search-panel" id="search" onSubmit={handleSubmit}>
-            <div className="panel-heading">
-              <p className="eyebrow">Quick check</p>
-              <h2>Search a vehicle</h2>
+          <div className="view-workspace" id="search">
+            <div className="view-tabs" aria-label="View options">
+              <button
+                className={activeView === 'search' ? 'active' : ''}
+                type="button"
+                onClick={() => setActiveView('search')}
+              >
+                Search by Vehicle
+              </button>
+              <button
+                className={activeView === 'rankings' ? 'active' : ''}
+                type="button"
+                onClick={() => setActiveView('rankings')}
+              >
+                Browse Rankings
+              </button>
             </div>
 
-            <div className="form-grid">
-              <label>
-                Year
-                <select
-                  value={selectedYear}
-                  onChange={handleYearChange}
-                  disabled={isLoadingVehicleOptions || !hasVehicleOptions}
-                >
-                  {yearOptions.map((year) => (
-                    <option key={year} value={year}>
-                      {year}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            {activeView === 'search' && (
+              <form className="search-panel" onSubmit={handleSubmit}>
+                <div className="panel-heading">
+                  <p className="eyebrow">Quick check</p>
+                  <h2>Search a vehicle</h2>
+                </div>
 
-              <label>
-                Make
-                <select
-                  value={selectedMake}
-                  onChange={handleMakeChange}
-                  disabled={isLoadingVehicleOptions || !hasVehicleOptions}
-                >
-                  {makeOptions.map((make) => (
-                    <option key={make} value={make}>
-                      {make}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                <div className="form-grid">
+                  <label>
+                    Year
+                    <select
+                      value={selectedYear}
+                      onChange={handleYearChange}
+                      disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                    >
+                      {yearOptions.map((year) => (
+                        <option key={year} value={year}>
+                          {year}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-              <label>
-                Model
-                <select
-                  value={selectedModel}
-                  onChange={handleModelChange}
-                  disabled={isLoadingVehicleOptions || !hasVehicleOptions}
-                >
-                  {modelOptions.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
+                  <label>
+                    Make
+                    <select
+                      value={selectedMake}
+                      onChange={handleMakeChange}
+                      disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                    >
+                      {makeOptions.map((make) => (
+                        <option key={make} value={make}>
+                          {make}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
 
-            <button type="submit" disabled={status === 'loading' || !hasVehicleOptions}>
-              {status === 'loading' ? 'Checking Wrenchability...' : 'Check Wrenchability'}
-            </button>
-            {isLoadingVehicleOptions && (
-              <p className="helper-text notice">Loading available vehicles...</p>
+                  <label>
+                    Model
+                    <select
+                      value={selectedModel}
+                      onChange={handleModelChange}
+                      disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                    >
+                      {modelOptions.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <button type="submit" disabled={status === 'loading' || !hasVehicleOptions}>
+                  {status === 'loading' ? 'Checking Wrenchability...' : 'Check Wrenchability'}
+                </button>
+                {isLoadingVehicleOptions && (
+                  <p className="helper-text notice">Loading available vehicles...</p>
+                )}
+                {!isLoadingVehicleOptions && !hasVehicleOptions && (
+                  <p className="helper-text notice">No vehicle data has been loaded yet.</p>
+                )}
+                <p className="helper-text">
+                  Start with the seeded 2011 GMC Acadia, then try other vehicles as data is added.
+                </p>
+              </form>
             )}
-            {!isLoadingVehicleOptions && !hasVehicleOptions && (
-              <p className="helper-text notice">No vehicle data has been loaded yet.</p>
+
+            {activeView === 'rankings' && (
+              <section className="rankings-panel" aria-label="Browse vehicle rankings">
+                <div className="panel-heading">
+                  <p className="eyebrow">Browse rankings</p>
+                  <h2>Ranked vehicles</h2>
+                </div>
+                <p className="helper-text">
+                  Rankings compare imported vehicles using common repair labor-time data.
+                  Scores improve as more vehicles are added.
+                </p>
+
+                <div className="ranking-controls">
+                  <label>
+                    Ranking type
+                    <select
+                      value={rankingType}
+                      onChange={(event) => setRankingType(event.target.value)}
+                    >
+                      {RANKING_TYPES.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Number to show
+                    <select
+                      value={rankingLimit}
+                      onChange={(event) => setRankingLimit(event.target.value)}
+                    >
+                      {RANKING_LIMITS.map((limit) => (
+                        <option key={limit} value={limit}>
+                          {limit}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Min year
+                    <select
+                      value={rankingMinYear}
+                      onChange={(event) => setRankingMinYear(event.target.value)}
+                    >
+                      <option value="">Any</option>
+                      {yearOptions.map((year) => (
+                        <option key={year} value={year}>
+                          {year}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Max year
+                    <select
+                      value={rankingMaxYear}
+                      onChange={(event) => setRankingMaxYear(event.target.value)}
+                    >
+                      <option value="">Any</option>
+                      {yearOptions.map((year) => (
+                        <option key={year} value={year}>
+                          {year}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Make
+                    <select
+                      value={rankingMake}
+                      onChange={(event) => setRankingMake(event.target.value)}
+                    >
+                      <option value="all">All Makes</option>
+                      {rankingMakeOptions.map((make) => (
+                        <option key={make} value={make}>
+                          {make}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      value={rankingSearchText}
+                      onChange={(event) => setRankingSearchText(event.target.value)}
+                      placeholder="Search make or model..."
+                    />
+                  </label>
+
+                  <label>
+                    Minimum score
+                    <input
+                      type="number"
+                      min="0"
+                      max="10"
+                      step="0.1"
+                      value={rankingMinScore}
+                      onChange={(event) => setRankingMinScore(event.target.value)}
+                    />
+                  </label>
+
+                  <label>
+                    Maximum score
+                    <input
+                      type="number"
+                      min="0"
+                      max="10"
+                      step="0.1"
+                      value={rankingMaxScore}
+                      onChange={(event) => setRankingMaxScore(event.target.value)}
+                    />
+                  </label>
+                </div>
+              </section>
             )}
-            <p className="helper-text">
-              Start with the seeded 2011 GMC Acadia, then try other vehicles as data is added.
-            </p>
-          </form>
+          </div>
         </section>
 
-        {hasResultsState && (
+        {activeView === 'rankings' && (
+          <section className="rankings-section" aria-live="polite">
+            {rankingsStatus === 'loading' && (
+              <article className="status-card">Loading vehicle rankings...</article>
+            )}
+
+            {rankingsStatus === 'error' && (
+              <article className="status-card error">
+                Something went wrong loading vehicle rankings.
+              </article>
+            )}
+
+            {rankingsStatus === 'loaded' && !hasRankedScores && (
+              <article className="status-card">
+                No ranked vehicles found. Import vehicles and recalculate scores first.
+              </article>
+            )}
+
+            {rankingsStatus === 'loaded' && hasRankedScores && visibleRankedVehicles.length === 0 && (
+              <article className="status-card">
+                {rankingsAreFiltered
+                  ? 'No vehicles match these filters.'
+                  : 'No ranked vehicles found. Import vehicles and recalculate scores first.'}
+              </article>
+            )}
+
+            {rankingsStatus === 'loaded' && visibleRankedVehicles.length > 0 && (
+              <div className="ranking-card-list">
+                {visibleRankedVehicles.map((vehicle, index) => (
+                  <article className="ranking-card" key={vehicle.id}>
+                    <div className={`rank-number ${scoreClass(getVehicleScoreValue(vehicle))}`}>
+                      #{index + 1}
+                    </div>
+                    <div className="ranking-card-main">
+                      <span className="meta-label">Vehicle</span>
+                      <h3>{getVehicleTitle(vehicle)}</h3>
+                      {vehicle.engine && <p>{vehicle.engine}</p>}
+                      {vehicle.vehicleScore?.verdict && <p>{vehicle.vehicleScore.verdict}</p>}
+                    </div>
+                    <div className="ranking-card-score">
+                      <span>Overall score</span>
+                      <strong>
+                        {Number.isFinite(getVehicleScoreValue(vehicle))
+                          ? `${formatScore(vehicle.vehicleScore.overall_score)} / 10`
+                          : 'Pending'}
+                      </strong>
+                      {vehicle.vehicleScore?.score_label && (
+                        <em>{vehicle.vehicleScore.score_label}</em>
+                      )}
+                      {vehicle.repairCount > 0 && (
+                        <span>{vehicle.repairCount} repair scores</span>
+                      )}
+                      <button type="button" onClick={() => handleRankingDetailsClick(vehicle)}>
+                        View repair details
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {activeView === 'search' && hasResultsState && (
           <section className="results-section" aria-live="polite">
             {status === 'loading' && (
               <article className="status-card">Checking Wrenchability...</article>
