@@ -413,6 +413,15 @@ async function fetchOpenLaborData(vehicle) {
   if (!response.ok) {
     const errorDetails = payload?.error;
 
+    if (response.status === 404 && errorDetails?.code === 'NOT_FOUND') {
+      return {
+        skipped: true,
+        reason: 'NOT_FOUND',
+        payload,
+        response,
+      };
+    }
+
     const errorMessage = errorDetails && (errorDetails.code || errorDetails.message)
       ? `Error: ${errorDetails.code ?? 'unknown-code'} - ${errorDetails.message ?? 'No error message returned'}`
       : 'Error response received but no structured error details were returned.';
@@ -467,6 +476,23 @@ async function upsertRowByFilters(tableName, filters, row, selectColumns = '*') 
   return { row: data, action: 'inserted' };
 }
 
+function buildSkippedResult(vehicle, response) {
+  return {
+    skipped: true,
+    reason: 'NOT_FOUND',
+    vehicleId: null,
+    year: vehicle.year,
+    make: vehicle.make,
+    model: vehicle.model,
+    rawJobCount: 0,
+    uniqueJobCount: 0,
+    laborEstimatesUpserted: 0,
+    repairScoresUpserted: 0,
+    overallScore: null,
+    rateLimitRemaining: response.headers.get('X-RateLimit-Remaining-Daily') ?? '',
+  };
+}
+
 export async function importOpenLaborVehicle(options = {}) {
   const vehicle = resolveVehicleOptions(options);
   const queueId = options.queueId ? String(options.queueId) : '';
@@ -476,7 +502,26 @@ export async function importOpenLaborVehicle(options = {}) {
   }
 
   try {
-    const { payload, response } = await fetchOpenLaborData(vehicle);
+    const openLaborResult = await fetchOpenLaborData(vehicle);
+
+    if (openLaborResult.skipped && openLaborResult.reason === 'NOT_FOUND') {
+      const result = buildSkippedResult(vehicle, openLaborResult.response);
+
+      console.log(`No Open Labor data found for ${vehicle.year} ${vehicle.make} ${vehicle.model}.`);
+
+      if (queueId) {
+        await updateQueueRow(queueId, {
+          status: 'skipped',
+          last_error: 'No Open Labor data found for this vehicle.',
+          finished_at: nowIso(),
+          updated_at: nowIso(),
+        });
+      }
+
+      return result;
+    }
+
+    const { payload, response } = openLaborResult;
 
     const collectedJobs = [];
     collectJobRecords(payload, collectedJobs);
@@ -845,6 +890,8 @@ export async function importOpenLaborVehicle(options = {}) {
     const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining-Daily') ?? '';
 
     const result = {
+      skipped: false,
+      reason: null,
       vehicleId,
       year: vehicle.year,
       make: vehicle.make,

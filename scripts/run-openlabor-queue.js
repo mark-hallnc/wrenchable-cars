@@ -60,6 +60,7 @@ async function main() {
   const rows = pendingRows ?? [];
   let attempted = 0;
   let completed = 0;
+  let skipped = 0;
   let failed = 0;
   let rateLimitRemaining = null;
 
@@ -81,7 +82,12 @@ async function main() {
         queueId: row.id,
       });
 
-      completed += 1;
+      if (result.skipped) {
+        skipped += 1;
+      } else {
+        completed += 1;
+      }
+
       if (result.rateLimitRemaining !== undefined && result.rateLimitRemaining !== null && result.rateLimitRemaining !== '') {
         rateLimitRemaining = result.rateLimitRemaining;
       }
@@ -98,6 +104,7 @@ async function main() {
   console.log('queue run complete');
   console.log(`attempted: ${attempted}`);
   console.log(`completed: ${completed}`);
+  console.log(`skipped: ${skipped}`);
   console.log(`failed: ${failed}`);
 
   if (rateLimitRemaining !== null) {
