@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:openlabor": "node scripts/test-openlabor.js",
-    "import:openlabor": "node scripts/import-openlabor-vehicle.js"
+    "import:openlabor": "node scripts/import-openlabor-vehicle.js",
+    "import:openlabor:queue": "node scripts/run-openlabor-queue.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",
