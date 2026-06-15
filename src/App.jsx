@@ -257,6 +257,22 @@ const getVehicleTitle = (vehicle) =>
 
 const getVehicleScoreValue = (vehicle) => Number(vehicle?.vehicleScore?.overall_score)
 
+const getEngineLabel = (vehicle) => {
+  const engine = String(vehicle?.engine ?? '').trim()
+  const sourceEngineSlug = String(vehicle?.source_engine_slug ?? '').trim()
+
+  if (engine) return engine
+  if (sourceEngineSlug) return sourceEngineSlug
+  return 'Base / unspecified engine'
+}
+
+const getEngineKey = (vehicle) => {
+  const sourceEngineSlug = normalizeText(vehicle?.source_engine_slug)
+  const engine = normalizeText(vehicle?.engine)
+
+  return sourceEngineSlug || engine || 'base-unspecified'
+}
+
 const getVehicleVerdict = (vehicleScore) => {
   const verdict = vehicleScore?.verdict ?? ''
   const normalizedVerdict = normalizeText(verdict)
@@ -295,6 +311,7 @@ const mapVehicleScoreRows = (scoreRows) =>
         model: vehicle.model,
         trim: vehicle.trim,
         engine: vehicle.engine,
+        source_engine_slug: vehicle.source_engine_slug,
         vehicleScore: {
           id: row.id,
           vehicle_id: row.vehicle_id,
@@ -321,6 +338,7 @@ const mergeVehicleScoreRows = (scoreRows, vehicleRows) => {
         model: vehicle.model,
         trim: vehicle.trim,
         engine: vehicle.engine,
+        source_engine_slug: vehicle.source_engine_slug,
         vehicleScore: {
           id: row.id,
           vehicle_id: row.vehicle_id,
@@ -405,11 +423,49 @@ const getUniqueModels = (vehicles, year, make) =>
     .filter(Boolean)
     .sort((a, b) => a.localeCompare(b))
 
+const getEngineOptions = (vehicles, year, make, model) => {
+  const matchingVehicles = vehicles.filter(
+    (vehicle) =>
+      String(vehicle.year) === String(year) &&
+      vehicle.make === make &&
+      vehicle.model === model,
+  )
+  const optionsByKey = new Map()
+
+  for (const vehicle of matchingVehicles) {
+    const key = getEngineKey(vehicle)
+
+    if (optionsByKey.has(key)) {
+      continue
+    }
+
+    optionsByKey.set(key, {
+      id: vehicle.id,
+      key,
+      label: getEngineLabel(vehicle),
+      sourceEngineSlug: vehicle.source_engine_slug ?? '',
+      hasKnownEngine: Boolean(
+        String(vehicle.engine ?? '').trim() || String(vehicle.source_engine_slug ?? '').trim(),
+      ),
+    })
+  }
+
+  return [...optionsByKey.values()].sort((first, second) => {
+    if (first.hasKnownEngine !== second.hasKnownEngine) {
+      return first.hasKnownEngine ? -1 : 1
+    }
+
+    return first.label.localeCompare(second.label)
+  })
+}
+
 function App() {
   const [activeView, setActiveView] = useState('search')
   const [selectedYear, setSelectedYear] = useState('2011')
   const [selectedMake, setSelectedMake] = useState('GMC')
   const [selectedModel, setSelectedModel] = useState('Acadia')
+  const [selectedEngineKey, setSelectedEngineKey] = useState('')
+  const [selectedVehicleId, setSelectedVehicleId] = useState('')
   const [vehicles, setVehicles] = useState([])
   const [rankedVehicles, setRankedVehicles] = useState([])
   const [rankingsStatus, setRankingsStatus] = useState('idle')
@@ -439,7 +495,7 @@ function App() {
 
         const { data, error } = await supabase
           .from('vehicles')
-          .select('id, year, make, model, trim, engine')
+          .select('id, year, make, model, trim, engine, source_engine_slug')
 
         if (error) throw error
 
@@ -454,9 +510,20 @@ function App() {
         setVehicles(loadedVehicles)
 
         if (firstYear) {
+          const firstEngineOptions = getEngineOptions(
+            loadedVehicles,
+            firstYear,
+            firstMake,
+            firstModel,
+          )
+
           setSelectedYear(firstYear)
           setSelectedMake(firstMake)
           setSelectedModel(firstModel)
+          setSelectedEngineKey(firstEngineOptions.length === 1 ? firstEngineOptions[0].key : '')
+          setSelectedVehicleId(
+            firstEngineOptions.length === 1 ? String(firstEngineOptions[0].id) : '',
+          )
         }
 
         setVehicleOptionsStatus('loaded')
@@ -493,7 +560,8 @@ function App() {
               make,
               model,
               trim,
-              engine
+              engine,
+              source_engine_slug
             )
           `)
 
@@ -504,7 +572,7 @@ function App() {
             supabase
               .from('vehicle_scores')
               .select('id, vehicle_id, overall_score, score_label, verdict'),
-            supabase.from('vehicles').select('id, year, make, model, trim, engine'),
+            supabase.from('vehicles').select('id, year, make, model, trim, engine, source_engine_slug'),
           ])
 
           if (scoresResponse.error) throw scoresResponse.error
@@ -546,9 +614,26 @@ function App() {
     () => getUniqueModels(vehicles, selectedYear, selectedMake),
     [vehicles, selectedYear, selectedMake],
   )
+  const engineOptions = useMemo(
+    () => getEngineOptions(vehicles, selectedYear, selectedMake, selectedModel),
+    [vehicles, selectedYear, selectedMake, selectedModel],
+  )
+  const selectedEngineOption = engineOptions.find(
+    (option) => option.key === selectedEngineKey,
+  )
+  const showEngineSelect = engineOptions.length > 1
+  const needsEngineSelection = showEngineSelect && !selectedVehicleId
 
   const hasVehicleOptions = vehicles.length > 0
   const isLoadingVehicleOptions = vehicleOptionsStatus === 'loading'
+
+  const applyEngineSelection = (nextYear, nextMake, nextModel) => {
+    const nextEngineOptions = getEngineOptions(vehicles, nextYear, nextMake, nextModel)
+    const nextEngineOption = nextEngineOptions.length === 1 ? nextEngineOptions[0] : null
+
+    setSelectedEngineKey(nextEngineOption?.key ?? '')
+    setSelectedVehicleId(nextEngineOption ? String(nextEngineOption.id) : '')
+  }
 
   const handleYearChange = (event) => {
     const nextYear = event.target.value
@@ -559,6 +644,7 @@ function App() {
     setSelectedYear(nextYear)
     setSelectedMake(nextMake)
     setSelectedModel(nextModels[0] ?? '')
+    applyEngineSelection(nextYear, nextMake, nextModels[0] ?? '')
     setResult(null)
     setStatus('idle')
   }
@@ -569,12 +655,26 @@ function App() {
 
     setSelectedMake(nextMake)
     setSelectedModel(nextModels[0] ?? '')
+    applyEngineSelection(selectedYear, nextMake, nextModels[0] ?? '')
     setResult(null)
     setStatus('idle')
   }
 
   const handleModelChange = (event) => {
-    setSelectedModel(event.target.value)
+    const nextModel = event.target.value
+
+    setSelectedModel(nextModel)
+    applyEngineSelection(selectedYear, selectedMake, nextModel)
+    setResult(null)
+    setStatus('idle')
+  }
+
+  const handleEngineChange = (event) => {
+    const nextEngineKey = event.target.value
+    const nextEngineOption = engineOptions.find((option) => option.key === nextEngineKey)
+
+    setSelectedEngineKey(nextEngineKey)
+    setSelectedVehicleId(nextEngineOption ? String(nextEngineOption.id) : '')
     setResult(null)
     setStatus('idle')
   }
@@ -597,7 +697,7 @@ function App() {
 
       let vehicleQuery = supabase
         .from('vehicles')
-        .select('id, year, make, model, trim, engine, generation')
+        .select('id, year, make, model, trim, engine, source_engine_slug, generation')
 
       if (vehicleLookup.id) {
         vehicleQuery = vehicleQuery.eq('id', vehicleLookup.id)
@@ -680,6 +780,7 @@ function App() {
   const handleSubmit = async (event) => {
     event.preventDefault()
     await loadVehicleDetails({
+      id: selectedVehicleId || selectedEngineOption?.id,
       year: selectedYear,
       make: selectedMake,
       model: selectedModel,
@@ -691,6 +792,8 @@ function App() {
     setSelectedYear(String(vehicle.year ?? ''))
     setSelectedMake(vehicle.make ?? '')
     setSelectedModel(vehicle.model ?? '')
+    setSelectedEngineKey(getEngineKey(vehicle))
+    setSelectedVehicleId(String(vehicle.id ?? ''))
     await loadVehicleDetails(vehicle)
   }
 
@@ -860,17 +963,46 @@ function App() {
                       ))}
                     </select>
                   </label>
+
+                  {showEngineSelect && (
+                    <label>
+                      Engine
+                      <select
+                        value={selectedEngineKey}
+                        onChange={handleEngineChange}
+                        disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                      >
+                        <option value="">Choose an engine</option>
+                        {engineOptions.map((option) => (
+                          <option key={option.key} value={option.key}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                 </div>
 
-                <button type="submit" disabled={status === 'loading' || !hasVehicleOptions}>
+                <button
+                  type="submit"
+                  disabled={status === 'loading' || !hasVehicleOptions || !selectedVehicleId}
+                >
                   {status === 'loading' ? 'Checking Wrenchability...' : 'Check Wrenchability'}
                 </button>
+                {needsEngineSelection && (
+                  <p className="helper-text notice">
+                    Choose an engine to get the most accurate repair ratings.
+                  </p>
+                )}
                 {isLoadingVehicleOptions && (
                   <p className="helper-text notice">Loading available vehicles...</p>
                 )}
                 {!isLoadingVehicleOptions && !hasVehicleOptions && (
                   <p className="helper-text notice">No vehicle data has been loaded yet.</p>
                 )}
+                <p className="helper-text">
+                  Choose a vehicle configuration to see common repair labor ratings.
+                </p>
               </form>
             )}
 
