@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { importOpenLaborVehicle } from './import-openlabor-vehicle.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -26,6 +27,11 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
   },
 });
 
+function normalizeLimit(value, fallback = 5) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.floor(numericValue) : fallback;
+}
+
 function parseLimit(argv = process.argv.slice(2)) {
   const limitArg = argv.find((arg) => arg.startsWith('--limit='));
 
@@ -33,16 +39,16 @@ function parseLimit(argv = process.argv.slice(2)) {
     return 5;
   }
 
-  const value = Number(limitArg.slice('--limit='.length));
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 5;
+  return normalizeLimit(limitArg.slice('--limit='.length), 5);
 }
 
 function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function main() {
-  const limit = parseLimit();
+export async function runOpenLaborQueue(options = {}) {
+  const limit = normalizeLimit(options.limit ?? parseLimit(), 5);
+  const log = options.log ?? true;
   const { data: pendingRows, error } = await supabase
     .from('openlabor_import_queue')
     .select(
@@ -68,7 +74,9 @@ async function main() {
     const row = rows[index];
     attempted += 1;
 
-    console.log(`Processing queue row ${row.id} (${row.year} ${row.make} ${row.model})...`);
+    if (log) {
+      console.log(`Processing queue row ${row.id} (${row.year} ${row.make} ${row.model})...`);
+    }
 
     try {
       const result = await importOpenLaborVehicle({
@@ -93,7 +101,9 @@ async function main() {
       }
     } catch (error) {
       failed += 1;
-      console.error(`Queue row ${row.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (log) {
+        console.error(`Queue row ${row.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
     if (index < rows.length - 1) {
@@ -101,18 +111,35 @@ async function main() {
     }
   }
 
-  console.log('queue run complete');
-  console.log(`attempted: ${attempted}`);
-  console.log(`completed: ${completed}`);
-  console.log(`skipped: ${skipped}`);
-  console.log(`failed: ${failed}`);
+  const summary = {
+    attempted,
+    completed,
+    skipped,
+    failed,
+    rateLimitRemaining,
+  };
 
-  if (rateLimitRemaining !== null) {
-    console.log(`rate limit remaining: ${rateLimitRemaining}`);
+  if (log) {
+    console.log('queue run complete');
+    console.log(`attempted: ${attempted}`);
+    console.log(`completed: ${completed}`);
+    console.log(`skipped: ${skipped}`);
+    console.log(`failed: ${failed}`);
+
+    if (rateLimitRemaining !== null) {
+      console.log(`rate limit remaining: ${rateLimitRemaining}`);
+    }
   }
+
+  return summary;
 }
 
-main().catch((error) => {
-  console.error(`Queue run failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+const isDirectExecution = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isDirectExecution) {
+  runOpenLaborQueue({ limit: parseLimit() }).catch((error) => {
+    console.error(`Queue run failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}

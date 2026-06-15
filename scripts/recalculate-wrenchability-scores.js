@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   buildRepairExplanation,
   buildVehicleVerdict,
@@ -173,7 +174,8 @@ function getWeightedAverage(scores, repairTasksById) {
   return Number((weightedTotal / totalWeight).toFixed(2));
 }
 
-async function main() {
+export async function recalculateScores(options = {}) {
+  const log = options.log ?? true;
   const [laborEstimates, repairTasks, vehicles] = await Promise.all([
     selectAllRows(
       'labor_estimates',
@@ -306,15 +308,33 @@ async function main() {
     'id, vehicle_id, overall_score, score_label, verdict, calculated_at',
   );
 
-  console.log(`total labor estimates processed: ${laborEstimates.length}`);
-  console.log(`total repair tasks scored: ${repairTaskIdsScored.size}`);
-  console.log(`total repair_scores upserted: ${repairScoresUpserted}`);
-  console.log(`total vehicle_scores recalculated: ${vehicleScoresRecalculated}`);
-  console.log(`relative comparison scores: ${relativeComparisonCount}`);
-  console.log(`fallback bucket scores: ${fallbackBucketCount}`);
+  const summary = {
+    totalLaborEstimatesProcessed: laborEstimates.length,
+    totalRepairTasksScored: repairTaskIdsScored.size,
+    repairScoresUpserted,
+    vehicleScoresRecalculated,
+    relativeComparisonScores: relativeComparisonCount,
+    fallbackBucketScores: fallbackBucketCount,
+  };
+
+  if (log) {
+    console.log(`total labor estimates processed: ${summary.totalLaborEstimatesProcessed}`);
+    console.log(`total repair tasks scored: ${summary.totalRepairTasksScored}`);
+    console.log(`total repair_scores upserted: ${summary.repairScoresUpserted}`);
+    console.log(`total vehicle_scores recalculated: ${summary.vehicleScoresRecalculated}`);
+    console.log(`relative comparison scores: ${summary.relativeComparisonScores}`);
+    console.log(`fallback bucket scores: ${summary.fallbackBucketScores}`);
+  }
+
+  return summary;
 }
 
-main().catch((error) => {
-  console.error(`Recalculation failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+const isDirectExecution = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isDirectExecution) {
+  recalculateScores().catch((error) => {
+    console.error(`Recalculation failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
