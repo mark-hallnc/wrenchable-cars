@@ -2,6 +2,13 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  buildRepairExplanation,
+  buildVehicleVerdict,
+  scoreFromHours,
+  scoreLabelFromScore,
+  vehicleScoreLabelFromScore,
+} from './lib/scoring.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -270,35 +277,6 @@ function getConfidenceLevel(confidence) {
   }
 
   return 'medium';
-}
-
-function scoreFromHours(hours) {
-  const numericHours = Number(hours);
-
-  if (!Number.isFinite(numericHours)) return 1;
-  if (numericHours <= 0.5) return 10;
-  if (numericHours <= 1) return 9;
-  if (numericHours <= 1.5) return 8;
-  if (numericHours <= 2) return 7;
-  if (numericHours <= 3) return 6;
-  if (numericHours <= 4) return 5;
-  if (numericHours <= 5.5) return 4;
-  if (numericHours <= 7) return 3;
-  if (numericHours <= 10) return 2;
-  return 1;
-}
-
-function getScoreLabel(score) {
-  if (score >= 9) return 'Easy';
-  if (score >= 7) return 'DIY Friendly';
-  if (score >= 5) return 'Moderate';
-  if (score >= 3) return 'Hard';
-  return 'Wrench Nightmare';
-}
-
-function formatHours(hours) {
-  const numericHours = Number(hours);
-  return Number.isFinite(numericHours) ? numericHours.toFixed(1).replace('.0', '') : String(hours);
 }
 
 function buildSourceNotes(job) {
@@ -760,9 +738,9 @@ export async function importOpenLaborVehicle(options = {}) {
         repair_task_id: task.id,
         labor_hours: laborHours,
         wrenchability_score: wrenchabilityScore,
-        score_label: getScoreLabel(wrenchabilityScore),
+        score_label: scoreLabelFromScore(wrenchabilityScore),
         percentile: null,
-        explanation: `OpenLabor estimates this job at ${formatHours(laborHours)} hours. This temporary score is based on labor time only.`,
+        explanation: buildRepairExplanation(laborHours),
       });
     }
 
@@ -836,14 +814,7 @@ export async function importOpenLaborVehicle(options = {}) {
       overallScore = totalWeight > 0 ? Number((totalWeightedScore / totalWeight).toFixed(1)) : null;
     }
 
-    const vehicleScoreLabel = (() => {
-      if (overallScore === null) return null;
-      if (overallScore >= 8) return 'Easy to Wrench';
-      if (overallScore >= 6.5) return 'DIY Friendly';
-      if (overallScore >= 5) return 'Moderate';
-      if (overallScore >= 3) return 'Hard to Wrench';
-      return 'Wrench Nightmare';
-    })();
+    const vehicleScoreLabel = overallScore === null ? null : vehicleScoreLabelFromScore(overallScore);
 
     const vehicleScoreRows = overallScore === null
       ? []
@@ -851,8 +822,7 @@ export async function importOpenLaborVehicle(options = {}) {
           vehicle_id: vehicleId,
           overall_score: overallScore,
           score_label: vehicleScoreLabel,
-          verdict:
-            'This score is based on imported Open Labor Project labor-time data. It will improve as more comparison data and repair notes are added.',
+          verdict: buildVehicleVerdict(),
         }];
 
     console.log('Syncing vehicle scores...');

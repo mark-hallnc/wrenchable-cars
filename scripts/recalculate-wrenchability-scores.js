@@ -1,6 +1,13 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import {
+  buildRepairExplanation,
+  buildVehicleVerdict,
+  scoreFromHours,
+  scoreLabelFromScore,
+  vehicleScoreLabelFromScore,
+} from './lib/scoring.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -51,39 +58,6 @@ const TARGET_OWNERSHIP_REPAIR_SLUGS = new Set([
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function formatHours(hours) {
-  const numericHours = Number(hours);
-  if (!Number.isFinite(numericHours)) {
-    return String(hours);
-  }
-
-  return numericHours.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
-}
-
-function scoreFromHours(hours) {
-  const numericHours = Number(hours);
-
-  if (!Number.isFinite(numericHours)) return 1;
-  if (numericHours <= 0.5) return 10;
-  if (numericHours <= 1) return 9;
-  if (numericHours <= 1.5) return 8;
-  if (numericHours <= 2) return 7;
-  if (numericHours <= 3) return 6;
-  if (numericHours <= 4) return 5;
-  if (numericHours <= 5.5) return 4;
-  if (numericHours <= 7) return 3;
-  if (numericHours <= 10) return 2;
-  return 1;
-}
-
-function scoreLabelFromScore(score) {
-  if (score >= 9) return 'Easy';
-  if (score >= 7) return 'DIY Friendly';
-  if (score >= 5) return 'Moderate';
-  if (score >= 3) return 'Advanced';
-  return 'Major Job';
 }
 
 function scoreFromRelativePercentile(percentile) {
@@ -178,14 +152,6 @@ async function upsertRowsInChunks(tableName, rows, onConflict, selectColumns, ch
   }
 
   return upsertedCount;
-}
-
-function buildRepairExplanation(hours) {
-  return `Estimated labor time: ${formatHours(hours)} hours.`;
-}
-
-function buildVehicleVerdict() {
-  return 'This score is based on common repair labor times and how approachable the vehicle is for typical maintenance and repair work.';
 }
 
 function getWeightedAverage(scores, repairTasksById) {
@@ -324,18 +290,10 @@ async function main() {
       continue;
     }
 
-    const scoreLabel = (() => {
-      if (overallScore >= 8) return 'Easy to Wrench';
-      if (overallScore >= 6.5) return 'DIY Friendly';
-      if (overallScore >= 5) return 'Moderate';
-      if (overallScore >= 3) return 'Advanced';
-      return 'Major Project';
-    })();
-
     vehicleScoreRows.push({
       vehicle_id: vehicle.id,
       overall_score: overallScore,
-      score_label: scoreLabel,
+      score_label: vehicleScoreLabelFromScore(overallScore),
       verdict: buildVehicleVerdict(),
       calculated_at: timestamp,
     });
