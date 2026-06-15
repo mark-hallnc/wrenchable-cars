@@ -257,13 +257,38 @@ const getVehicleTitle = (vehicle) =>
 
 const getVehicleScoreValue = (vehicle) => Number(vehicle?.vehicleScore?.overall_score)
 
+const formatEngineSlug = (slug) => {
+  const words = String(slug ?? '')
+    .trim()
+    .split('-')
+    .filter(Boolean)
+
+  if (words.length === 0) return ''
+
+  return words
+    .map((word) => {
+      const lowerWord = word.toLowerCase()
+
+      if (/^\d+(\.\d+)?l$/.test(lowerWord)) return lowerWord.toUpperCase()
+      if (/^v\d+$/.test(lowerWord)) return lowerWord.toUpperCase()
+      if (lowerWord === 'ecoboost') return 'EcoBoost'
+      if (lowerWord === 'coyote') return 'Coyote'
+      if (lowerWord === 'hemi') return 'HEMI'
+      if (lowerWord === 'vct') return 'VCT'
+      if (lowerWord === 'ti') return 'Ti'
+
+      return lowerWord.charAt(0).toUpperCase() + lowerWord.slice(1)
+    })
+    .join(' ')
+}
+
 const getVehicleConfigurationLabel = (vehicle) => {
   const engine = String(vehicle?.engine ?? '').trim()
-  const sourceEngineSlug = String(vehicle?.source_engine_slug ?? '').trim()
+  const sourceEngineSlug = formatEngineSlug(vehicle?.source_engine_slug)
   const trim = String(vehicle?.trim ?? '').trim()
   const configuration = engine || sourceEngineSlug || 'Base / unspecified engine'
 
-  return trim ? `${configuration} - ${trim}` : configuration
+  return trim ? `${configuration} · ${trim}` : configuration
 }
 
 const getEngineKey = (vehicle) => {
