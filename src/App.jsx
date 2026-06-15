@@ -273,6 +273,23 @@ const getEngineKey = (vehicle) => {
   return sourceEngineSlug || engine || 'base-unspecified'
 }
 
+const hasSpecificEngine = (vehicle) =>
+  Boolean(normalizeText(vehicle?.engine) || normalizeText(vehicle?.source_engine_slug))
+
+const hasSpecificEngineSibling = (vehicle, allVehicles) =>
+  !hasSpecificEngine(vehicle) &&
+  (allVehicles ?? []).some(
+    (candidate) =>
+      String(candidate.id) !== String(vehicle.id) &&
+      String(candidate.year) === String(vehicle.year) &&
+      candidate.make === vehicle.make &&
+      candidate.model === vehicle.model &&
+      hasSpecificEngine(candidate),
+  )
+
+const isGenericVehicleHidden = (vehicle, allVehicles) =>
+  hasSpecificEngineSibling(vehicle, allVehicles)
+
 const getVehicleVerdict = (vehicleScore) => {
   const verdict = vehicleScore?.verdict ?? ''
   const normalizedVerdict = normalizeText(verdict)
@@ -359,6 +376,7 @@ const getRankedVehicles = (vehicles, filters) => {
   const maxScore = optionalNumber(filters.maxScore)
 
   return vehicles
+    .filter((vehicle) => !isGenericVehicleHidden(vehicle, vehicles))
     .filter((vehicle) => {
       const year = Number(vehicle.year)
       const score = getVehicleScoreValue(vehicle)
@@ -428,7 +446,8 @@ const getEngineOptions = (vehicles, year, make, model) => {
     (vehicle) =>
       String(vehicle.year) === String(year) &&
       vehicle.make === make &&
-      vehicle.model === model,
+      vehicle.model === model &&
+      !isGenericVehicleHidden(vehicle, vehicles),
   )
   const optionsByKey = new Map()
 
