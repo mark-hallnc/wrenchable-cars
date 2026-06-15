@@ -88,6 +88,9 @@ const RANKING_TYPES = [
 
 const RANKING_LIMITS = ['10', '25', '50', '100']
 
+const VEHICLE_VERDICT =
+  'This score is based on common repair labor times and how approachable the vehicle is for typical maintenance and repair work.'
+
 const normalizeText = (value) => String(value ?? '').trim().toLowerCase()
 
 const getRepairTask = (repair) =>
@@ -245,6 +248,23 @@ const getVehicleTitle = (vehicle) =>
   [vehicle?.year, vehicle?.make, vehicle?.model].filter(Boolean).join(' ')
 
 const getVehicleScoreValue = (vehicle) => Number(vehicle?.vehicleScore?.overall_score)
+
+const getVehicleVerdict = (vehicleScore) => {
+  const verdict = vehicleScore?.verdict ?? ''
+  const normalizedVerdict = normalizeText(verdict)
+
+  if (
+    !verdict ||
+    normalizedVerdict.includes('imported vehicles') ||
+    normalizedVerdict.includes('openlabor') ||
+    normalizedVerdict.includes('open labor') ||
+    normalizedVerdict.includes('percentile')
+  ) {
+    return VEHICLE_VERDICT
+  }
+
+  return verdict
+}
 
 const getRankedVehicles = (vehicles, filters) => {
   const normalizedSearch = normalizeText(filters.searchText)
@@ -524,7 +544,7 @@ function App() {
         supabase
           .from('repair_scores')
           .select(
-            'id, repair_task_id, labor_hours, wrenchability_score, score_label, explanation',
+            'id, repair_task_id, labor_hours, wrenchability_score, score_label',
           )
           .eq('vehicle_id', vehicle.id),
       ])
@@ -559,7 +579,6 @@ function App() {
             hours: repair.labor_hours,
             score: repair.wrenchability_score,
             label: repair.score_label,
-            explanation: repair.explanation,
           }
         })
         .sort((a, b) => a.displayOrder - b.displayOrder || a.name.localeCompare(b.name))
@@ -772,9 +791,6 @@ function App() {
                 {!isLoadingVehicleOptions && !hasVehicleOptions && (
                   <p className="helper-text notice">No vehicle data has been loaded yet.</p>
                 )}
-                <p className="helper-text">
-                  Start with the seeded 2011 GMC Acadia, then try other vehicles as data is added.
-                </p>
               </form>
             )}
 
@@ -785,7 +801,7 @@ function App() {
                   <h2>Ranked vehicles</h2>
                 </div>
                 <p className="helper-text">
-                  Rankings compare imported vehicles using common repair labor-time data.
+                  Rankings compare vehicles using common repair labor-time data.
                   Scores improve as more vehicles are added.
                 </p>
 
@@ -916,7 +932,7 @@ function App() {
 
             {rankingsStatus === 'loaded' && !hasRankedScores && (
               <article className="status-card">
-                No ranked vehicles found. Import vehicles and recalculate scores first.
+                No ranked vehicles found. Add vehicle data and recalculate scores first.
               </article>
             )}
 
@@ -924,7 +940,7 @@ function App() {
               <article className="status-card">
                 {rankingsAreFiltered
                   ? 'No vehicles match these filters.'
-                  : 'No ranked vehicles found. Import vehicles and recalculate scores first.'}
+                  : 'No ranked vehicles found. Add vehicle data and recalculate scores first.'}
               </article>
             )}
 
@@ -939,7 +955,7 @@ function App() {
                       <span className="meta-label">Vehicle</span>
                       <h3>{getVehicleTitle(vehicle)}</h3>
                       {vehicle.engine && <p>{vehicle.engine}</p>}
-                      {vehicle.vehicleScore?.verdict && <p>{vehicle.vehicleScore.verdict}</p>}
+                      {vehicle.vehicleScore && <p>{getVehicleVerdict(vehicle.vehicleScore)}</p>}
                     </div>
                     <div className="ranking-card-score">
                       <span>Overall score</span>
@@ -1009,8 +1025,7 @@ function App() {
                     </div>
                   </div>
                   <p>
-                    {result.vehicleScore?.verdict ??
-                      'Wrenchability data is available, but the overall verdict is still pending.'}
+                    {getVehicleVerdict(result.vehicleScore)}
                   </p>
                 </article>
 
@@ -1076,9 +1091,6 @@ function App() {
                           <span>{Number(getRepairHours(repair)).toFixed(1)} labor hours</span>
                           {getRepairCategory(repair) && (
                             <p className="repair-detail">{getRepairCategory(repair)}</p>
-                          )}
-                          {repair.explanation && (
-                            <p className="repair-detail">{repair.explanation}</p>
                           )}
                         </div>
                         <div className="repair-score">

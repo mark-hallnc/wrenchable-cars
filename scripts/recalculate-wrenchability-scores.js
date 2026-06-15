@@ -62,12 +62,6 @@ function formatHours(hours) {
   return numericHours.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
 }
 
-function formatPercentile(percentile) {
-  return Number.isInteger(percentile)
-    ? String(percentile)
-    : Number(percentile).toFixed(2).replace(/0+$/, '').replace(/\.$/, '');
-}
-
 function scoreFromHours(hours) {
   const numericHours = Number(hours);
 
@@ -88,11 +82,11 @@ function scoreLabelFromScore(score) {
   if (score >= 9) return 'Easy';
   if (score >= 7) return 'DIY Friendly';
   if (score >= 5) return 'Moderate';
-  if (score >= 3) return 'Hard';
-  return 'Wrench Nightmare';
+  if (score >= 3) return 'Advanced';
+  return 'Major Job';
 }
 
-function percentileToScore(percentile) {
+function scoreFromRelativePercentile(percentile) {
   if (percentile >= 95) return 10;
   if (percentile >= 85) return 9;
   if (percentile >= 75) return 8;
@@ -103,6 +97,24 @@ function percentileToScore(percentile) {
   if (percentile >= 15) return 3;
   if (percentile >= 5) return 2;
   return 1;
+}
+
+function clampScore(score) {
+  return Math.max(1, Math.min(score, 10));
+}
+
+function hybridRepairScore(hours, percentile) {
+  const hoursScore = scoreFromHours(hours);
+
+  if (percentile === null || percentile === undefined) {
+    return hoursScore;
+  }
+
+  const relativeScore = scoreFromRelativePercentile(percentile);
+  const weightedScore = Math.round((hoursScore * 0.7) + (relativeScore * 0.3));
+  const boundedScore = Math.max(hoursScore - 2, Math.min(weightedScore, hoursScore + 2));
+
+  return clampScore(boundedScore);
 }
 
 function roundPercentile(value) {
@@ -168,16 +180,12 @@ async function upsertRowsInChunks(tableName, rows, onConflict, selectColumns, ch
   return upsertedCount;
 }
 
-function buildRelativeExplanation(hours, percentile) {
-  return `OpenLabor estimates this job at ${formatHours(hours)} hours. Compared with the same repair across imported vehicles, this lands in the ${formatPercentile(percentile)} percentile for ease of repair.`;
-}
-
-function buildFallbackExplanation(hours) {
-  return `OpenLabor estimates this job at ${formatHours(hours)} hours. This temporary score is based on labor time only because more comparison data is needed for this repair.`;
+function buildRepairExplanation(hours) {
+  return `Estimated labor time: ${formatHours(hours)} hours.`;
 }
 
 function buildVehicleVerdict() {
-  return 'This score compares common repair labor times against other imported vehicles. Scores will improve as more vehicles and repair data are added.';
+  return 'This score is based on common repair labor times and how approachable the vehicle is for typical maintenance and repair work.';
 }
 
 function getWeightedAverage(scores, repairTasksById) {
@@ -244,7 +252,6 @@ async function main() {
     for (const estimate of sortedEstimates) {
       let percentile = null;
       let wrenchabilityScore = null;
-      let explanation = '';
 
       if (useRelativeComparison) {
         const minHours = uniqueHours[0];
@@ -259,12 +266,10 @@ async function main() {
           percentile = roundPercentile(scaledPercentile);
         }
 
-        wrenchabilityScore = percentileToScore(percentile);
-        explanation = buildRelativeExplanation(estimate.labor_hours, percentile);
+        wrenchabilityScore = hybridRepairScore(estimate.labor_hours, percentile);
         relativeComparisonCount += 1;
       } else {
-        wrenchabilityScore = scoreFromHours(estimate.labor_hours);
-        explanation = buildFallbackExplanation(estimate.labor_hours);
+        wrenchabilityScore = hybridRepairScore(estimate.labor_hours, null);
         fallbackBucketCount += 1;
       }
 
@@ -275,7 +280,7 @@ async function main() {
         wrenchability_score: wrenchabilityScore,
         score_label: scoreLabelFromScore(wrenchabilityScore),
         percentile,
-        explanation,
+        explanation: buildRepairExplanation(estimate.labor_hours),
         calculated_at: timestamp,
       });
     }
@@ -323,8 +328,8 @@ async function main() {
       if (overallScore >= 8) return 'Easy to Wrench';
       if (overallScore >= 6.5) return 'DIY Friendly';
       if (overallScore >= 5) return 'Moderate';
-      if (overallScore >= 3) return 'Hard to Wrench';
-      return 'Wrench Nightmare';
+      if (overallScore >= 3) return 'Advanced';
+      return 'Major Project';
     })();
 
     vehicleScoreRows.push({
