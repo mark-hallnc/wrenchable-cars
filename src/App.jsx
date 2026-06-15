@@ -93,6 +93,14 @@ const VEHICLE_VERDICT =
 
 const normalizeText = (value) => String(value ?? '').trim().toLowerCase()
 
+const optionalNumber = (value) => {
+  if (value === '' || value === null || value === undefined) return null
+
+  const numericValue = Number(value)
+
+  return Number.isFinite(numericValue) ? numericValue : null
+}
+
 const getRepairTask = (repair) =>
   repair?.repair_tasks ?? repair?.repair_task ?? repair?.task ?? null
 
@@ -266,12 +274,71 @@ const getVehicleVerdict = (vehicleScore) => {
   return verdict
 }
 
+const getJoinedVehicle = (scoreRow) => {
+  if (Array.isArray(scoreRow?.vehicles)) {
+    return scoreRow.vehicles[0] ?? null
+  }
+
+  return scoreRow?.vehicles ?? null
+}
+
+const mapVehicleScoreRows = (scoreRows) =>
+  (scoreRows ?? [])
+    .filter((row) => getJoinedVehicle(row))
+    .map((row) => {
+      const vehicle = getJoinedVehicle(row)
+
+      return {
+        id: vehicle.id,
+        year: vehicle.year,
+        make: vehicle.make,
+        model: vehicle.model,
+        trim: vehicle.trim,
+        engine: vehicle.engine,
+        vehicleScore: {
+          id: row.id,
+          vehicle_id: row.vehicle_id,
+          overall_score: row.overall_score,
+          score_label: row.score_label,
+          verdict: row.verdict,
+        },
+        repairCount: 0,
+      }
+    })
+
+const mergeVehicleScoreRows = (scoreRows, vehicleRows) => {
+  const vehiclesById = new Map((vehicleRows ?? []).map((vehicle) => [vehicle.id, vehicle]))
+
+  return (scoreRows ?? [])
+    .filter((row) => vehiclesById.has(row.vehicle_id))
+    .map((row) => {
+      const vehicle = vehiclesById.get(row.vehicle_id)
+
+      return {
+        id: vehicle.id,
+        year: vehicle.year,
+        make: vehicle.make,
+        model: vehicle.model,
+        trim: vehicle.trim,
+        engine: vehicle.engine,
+        vehicleScore: {
+          id: row.id,
+          vehicle_id: row.vehicle_id,
+          overall_score: row.overall_score,
+          score_label: row.score_label,
+          verdict: row.verdict,
+        },
+        repairCount: 0,
+      }
+    })
+}
+
 const getRankedVehicles = (vehicles, filters) => {
   const normalizedSearch = normalizeText(filters.searchText)
-  const minYear = Number(filters.minYear)
-  const maxYear = Number(filters.maxYear)
-  const minScore = Number(filters.minScore)
-  const maxScore = Number(filters.maxScore)
+  const minYear = optionalNumber(filters.minYear)
+  const maxYear = optionalNumber(filters.maxYear)
+  const minScore = optionalNumber(filters.minScore)
+  const maxScore = optionalNumber(filters.maxScore)
 
   return vehicles
     .filter((vehicle) => {
@@ -279,11 +346,11 @@ const getRankedVehicles = (vehicles, filters) => {
       const score = getVehicleScoreValue(vehicle)
 
       if (filters.rankingType !== 'all' && !Number.isFinite(score)) return false
-      if (Number.isFinite(minYear) && year < minYear) return false
-      if (Number.isFinite(maxYear) && year > maxYear) return false
+      if (minYear !== null && year < minYear) return false
+      if (maxYear !== null && year > maxYear) return false
       if (filters.make !== 'all' && vehicle.make !== filters.make) return false
-      if (Number.isFinite(minScore) && (!Number.isFinite(score) || score < minScore)) return false
-      if (Number.isFinite(maxScore) && (!Number.isFinite(score) || score > maxScore)) return false
+      if (minScore !== null && (!Number.isFinite(score) || score < minScore)) return false
+      if (maxScore !== null && (!Number.isFinite(score) || score > maxScore)) return false
 
       if (!normalizedSearch) return true
 
@@ -405,12 +472,6 @@ function App() {
 
   useEffect(() => {
     const loadRankings = async () => {
-      if (vehicleOptionsStatus !== 'loaded' || vehicles.length === 0) {
-        setRankedVehicles([])
-        setRankingsStatus(vehicleOptionsStatus === 'loading' ? 'loading' : 'loaded')
-        return
-      }
-
       setRankingsStatus('loading')
 
       try {
@@ -418,32 +479,53 @@ function App() {
           throw new Error('Supabase is not configured.')
         }
 
-        const [scoresResponse, repairCountsResponse] = await Promise.all([
-          supabase
-            .from('vehicle_scores')
-            .select('vehicle_id, overall_score, score_label, verdict'),
-          supabase.from('repair_scores').select('vehicle_id'),
-        ])
+        const { data, error } = await supabase
+          .from('vehicle_scores')
+          .select(`
+            id,
+            vehicle_id,
+            overall_score,
+            score_label,
+            verdict,
+            vehicles (
+              id,
+              year,
+              make,
+              model,
+              trim,
+              engine
+            )
+          `)
 
-        if (scoresResponse.error) throw scoresResponse.error
-        if (repairCountsResponse.error) throw repairCountsResponse.error
+        if (error) {
+          console.warn('Joined vehicle rankings query failed, using fallback:', error)
 
-        const scoresByVehicleId = new Map(
-          (scoresResponse.data ?? []).map((score) => [score.vehicle_id, score]),
-        )
-        const repairCountsByVehicleId = (repairCountsResponse.data ?? []).reduce(
-          (counts, repair) =>
-            counts.set(repair.vehicle_id, (counts.get(repair.vehicle_id) ?? 0) + 1),
-          new Map(),
-        )
+          const [scoresResponse, vehiclesResponse] = await Promise.all([
+            supabase
+              .from('vehicle_scores')
+              .select('id, vehicle_id, overall_score, score_label, verdict'),
+            supabase.from('vehicles').select('id, year, make, model, trim, engine'),
+          ])
 
-        setRankedVehicles(
-          vehicles.map((vehicle) => ({
-            ...vehicle,
-            vehicleScore: scoresByVehicleId.get(vehicle.id) ?? null,
-            repairCount: repairCountsByVehicleId.get(vehicle.id) ?? 0,
-          })),
-        )
+          if (scoresResponse.error) throw scoresResponse.error
+          if (vehiclesResponse.error) throw vehiclesResponse.error
+
+          const ranked = mergeVehicleScoreRows(scoresResponse.data, vehiclesResponse.data)
+
+          console.log('vehicle_scores rows:', scoresResponse.data?.length || 0)
+          console.log('ranked vehicles:', ranked.length)
+
+          setRankedVehicles(ranked)
+          setRankingsStatus('loaded')
+          return
+        }
+
+        const ranked = mapVehicleScoreRows(data)
+
+        console.log('vehicle_scores rows:', data?.length || 0)
+        console.log('ranked vehicles:', ranked.length)
+
+        setRankedVehicles(ranked)
         setRankingsStatus('loaded')
       } catch (error) {
         console.error('Error loading vehicle rankings:', error)
@@ -453,7 +535,7 @@ function App() {
     }
 
     loadRankings()
-  }, [vehicleOptionsStatus, vehicles])
+  }, [])
 
   const yearOptions = useMemo(() => getUniqueYears(vehicles), [vehicles])
   const makeOptions = useMemo(
@@ -648,9 +730,7 @@ function App() {
     () => getRankedVehicles(rankedVehicles, rankingFilters),
     [rankedVehicles, rankingFilters],
   )
-  const hasRankedScores = rankedVehicles.some((vehicle) =>
-    Number.isFinite(getVehicleScoreValue(vehicle)),
-  )
+  const hasRankedVehicles = rankedVehicles.length > 0
   const rankingsAreFiltered =
     rankingMinYear ||
     rankingMaxYear ||
@@ -930,13 +1010,13 @@ function App() {
               </article>
             )}
 
-            {rankingsStatus === 'loaded' && !hasRankedScores && (
+            {rankingsStatus === 'loaded' && !hasRankedVehicles && (
               <article className="status-card">
                 No ranked vehicles found. Add vehicle data and recalculate scores first.
               </article>
             )}
 
-            {rankingsStatus === 'loaded' && hasRankedScores && visibleRankedVehicles.length === 0 && (
+            {rankingsStatus === 'loaded' && hasRankedVehicles && visibleRankedVehicles.length === 0 && (
               <article className="status-card">
                 {rankingsAreFiltered
                   ? 'No vehicles match these filters.'
