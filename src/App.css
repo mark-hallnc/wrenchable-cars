@@ -108,6 +108,7 @@
 
 .search-panel,
 .rankings-panel,
+.status-panel,
 .result-card,
 .repairs-panel,
 .ranking-card,
@@ -129,7 +130,7 @@
 
 .view-tabs {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.45rem;
   border: 1px solid #d6e0e8;
   border-radius: 8px;
@@ -152,7 +153,8 @@
   color: #183b43;
 }
 
-.rankings-panel {
+.rankings-panel,
+.status-panel {
   padding: clamp(1.25rem, 3vw, 2rem);
 }
 
@@ -235,6 +237,23 @@ button:disabled {
   cursor: wait;
   opacity: 0.72;
   transform: none;
+}
+
+.secondary-button {
+  width: auto;
+  min-width: 10rem;
+  min-height: 2.7rem;
+  border: 1px solid #cbd6df;
+  padding: 0 0.95rem;
+  background: #ffffff;
+  color: #334256;
+  font-size: 0.9rem;
+}
+
+.secondary-button:hover {
+  border-color: #2f6f7c;
+  background: #e8f3f5;
+  color: #183b43;
 }
 
 .helper-text {
@@ -508,6 +527,133 @@ button:disabled {
   margin-top: 0.25rem;
 }
 
+.status-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.data-status-content {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.2rem;
+}
+
+.status-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.status-metric-card,
+.status-detail-card,
+.status-recommendation {
+  border: 1px solid #dde5ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.status-metric-card {
+  display: grid;
+  gap: 0.35rem;
+  min-height: 6.5rem;
+  padding: 1rem;
+}
+
+.status-metric-card span,
+.status-count-list span {
+  color: #667789;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.status-metric-card strong {
+  color: #111b27;
+  font-size: clamp(1.6rem, 3vw, 2.2rem);
+  line-height: 1;
+}
+
+.status-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.status-detail-card {
+  padding: 1rem;
+}
+
+.status-detail-card h3 {
+  margin: 0 0 0.85rem;
+  color: #111b27;
+  font-size: 1.05rem;
+}
+
+.status-detail-card p {
+  margin: 0;
+  color: #405064;
+  line-height: 1.5;
+}
+
+.status-count-list {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.status-count-list div {
+  display: grid;
+  gap: 0.25rem;
+  border-radius: 6px;
+  padding: 0.75rem;
+  background: #f8fafc;
+}
+
+.status-count-list strong,
+.compact-list strong,
+.status-large-number {
+  color: #111b27;
+  font-weight: 900;
+}
+
+.status-large-number {
+  display: block;
+  margin-bottom: 0.75rem;
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.compact-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.compact-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  border-bottom: 1px solid #edf2f6;
+  padding-bottom: 0.5rem;
+  color: #405064;
+  line-height: 1.35;
+}
+
+.compact-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.status-recommendation {
+  padding: 1rem;
+  color: #183b43;
+  background: #e8f3f5;
+  font-weight: 900;
+}
+
 .repair-list {
   display: grid;
   gap: 0.7rem;
@@ -655,8 +801,21 @@ button:disabled {
   .repair-row,
   .repair-control-row,
   .ranking-card,
+  .status-detail-grid,
   .info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .status-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .status-count-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .status-panel-header {
+    display: grid;
   }
 
   .ranking-controls {
@@ -679,9 +838,13 @@ button:disabled {
 
   .search-panel,
   .rankings-panel,
+  .status-panel,
   .result-card,
   .repairs-panel,
   .ranking-card,
+  .status-metric-card,
+  .status-detail-card,
+  .status-recommendation,
   .info-grid article,
   .repair-row,
   .empty-repairs {
@@ -698,6 +861,19 @@ button:disabled {
 
   .filter-button-group button {
     width: 100%;
+  }
+
+  .status-metric-grid,
+  .status-count-list {
+    grid-template-columns: 1fr;
+  }
+
+  .secondary-button {
+    width: 100%;
+  }
+
+  .compact-list li {
+    display: grid;
   }
 
   .label-pill {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabaseClient'
 import './App.css'
 
@@ -87,6 +87,8 @@ const RANKING_TYPES = [
 ]
 
 const RANKING_LIMITS = ['10', '25', '50', '100']
+
+const QUEUE_STATUSES = ['pending', 'running', 'completed', 'skipped', 'failed']
 
 const VEHICLE_VERDICT =
   'This score is based on common repair labor times and how approachable the vehicle is for typical maintenance and repair work.'
@@ -178,6 +180,40 @@ const compareFiniteNumbers = (first, second, direction = 'asc') => {
 
 const compareRepairNames = (first, second) =>
   getRepairName(first).localeCompare(getRepairName(second))
+
+const incrementCount = (map, key, amount = 1) => {
+  map.set(key, (map.get(key) ?? 0) + amount)
+}
+
+const getTopCountEntries = (map, limit = 10) =>
+  [...map.entries()]
+    .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0]))
+    .slice(0, limit)
+    .map(([label, count]) => ({ label, count }))
+
+const selectAllRows = async (tableName, selectColumns) => {
+  const pageSize = 1000
+  const rows = []
+  let start = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from(tableName)
+      .select(selectColumns)
+      .range(start, start + pageSize - 1)
+
+    if (error) throw error
+
+    const pageRows = data ?? []
+    rows.push(...pageRows)
+
+    if (pageRows.length < pageSize) break
+
+    start += pageSize
+  }
+
+  return rows
+}
 
 const getRecommendedRepairSort = (viewFilter) => {
   if (viewFilter === 'top-ownership') {
@@ -288,7 +324,7 @@ const getVehicleConfigurationLabel = (vehicle) => {
   const trim = String(vehicle?.trim ?? '').trim()
   const configuration = engine || sourceEngineSlug || 'Base / unspecified engine'
 
-  return trim ? `${configuration} · ${trim}` : configuration
+  return trim ? `${configuration} - ${trim}` : configuration
 }
 
 const getEngineKey = (vehicle) => {
@@ -506,6 +542,84 @@ const getEngineOptions = (vehicles, year, make, model) => {
   })
 }
 
+const buildDataStatusSummary = ({
+  vehicles,
+  vehicleScores,
+  repairScores,
+  laborEstimates,
+  repairTasks,
+  queueRows,
+  queueAvailable,
+}) => {
+  const vehicleScoresByVehicleId = new Set(
+    vehicleScores.map((score) => String(score.vehicle_id)),
+  )
+  const engineSpecificVehicles = vehicles.filter(hasSpecificConfiguration)
+  const genericVehicles = vehicles.filter((vehicle) => !hasSpecificConfiguration(vehicle))
+  const missingScoreVehicles = vehicles.filter(
+    (vehicle) => !vehicleScoresByVehicleId.has(String(vehicle.id)),
+  )
+
+  const queueStatusCounts = Object.fromEntries(QUEUE_STATUSES.map((status) => [status, 0]))
+
+  for (const row of queueRows) {
+    const status = row.status ?? 'unknown'
+    queueStatusCounts[status] = (queueStatusCounts[status] ?? 0) + 1
+  }
+
+  const makeModelCounts = new Map()
+  const variantsByYearMakeModel = new Map()
+
+  for (const vehicle of vehicles) {
+    incrementCount(makeModelCounts, `${vehicle.make} ${vehicle.model}`)
+
+    const groupKey = `${vehicle.year} ${vehicle.make} ${vehicle.model}`
+
+    if (!variantsByYearMakeModel.has(groupKey)) {
+      variantsByYearMakeModel.set(groupKey, new Set())
+    }
+
+    variantsByYearMakeModel
+      .get(groupKey)
+      .add(getVehicleConfigurationLabel(vehicle).toLowerCase())
+  }
+
+  const variantCounts = new Map(
+    [...variantsByYearMakeModel.entries()].map(([group, variants]) => [
+      group,
+      variants.size,
+    ]),
+  )
+  const pendingQueueRows = queueStatusCounts.pending ?? 0
+
+  let recommendation = 'Database looks ready for frontend testing.'
+
+  if (queueAvailable && pendingQueueRows > 0) {
+    recommendation = 'Next: process more queued vehicles, then recalculate scores.'
+  } else if (missingScoreVehicles.length > 0) {
+    recommendation = 'Next: recalculate Wrenchability scores.'
+  }
+
+  return {
+    counts: {
+      vehicles: vehicles.length,
+      engineSpecificVehicles: engineSpecificVehicles.length,
+      genericVehicles: genericVehicles.length,
+      vehicleScores: vehicleScores.length,
+      repairScores: repairScores.length,
+      laborEstimates: laborEstimates.length,
+      repairTasks: repairTasks.length,
+      queueTotal: queueAvailable ? queueRows.length : null,
+    },
+    queueAvailable,
+    queueStatusCounts,
+    missingScoreVehicles,
+    topMakeModelGroups: getTopCountEntries(makeModelCounts),
+    topVariantGroups: getTopCountEntries(variantCounts),
+    recommendation,
+  }
+}
+
 function App() {
   const [activeView, setActiveView] = useState('search')
   const [selectedYear, setSelectedYear] = useState('2011')
@@ -516,6 +630,8 @@ function App() {
   const [vehicles, setVehicles] = useState([])
   const [rankedVehicles, setRankedVehicles] = useState([])
   const [rankingsStatus, setRankingsStatus] = useState('idle')
+  const [dataStatusSummary, setDataStatusSummary] = useState(null)
+  const [dataStatusState, setDataStatusState] = useState('idle')
   const [vehicleOptionsStatus, setVehicleOptionsStatus] = useState('loading')
   const [status, setStatus] = useState('idle')
   const [result, setResult] = useState(null)
@@ -651,6 +767,63 @@ function App() {
 
     loadRankings()
   }, [])
+
+  const loadDataStatus = useCallback(async () => {
+    setDataStatusState('loading')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const [
+        vehiclesRows,
+        vehicleScoreRows,
+        repairScoreRows,
+        laborEstimateRows,
+        repairTaskRows,
+      ] = await Promise.all([
+        selectAllRows('vehicles', 'id, year, make, model, trim, engine, source_engine_slug'),
+        selectAllRows('vehicle_scores', 'id, vehicle_id'),
+        selectAllRows('repair_scores', 'id, vehicle_id'),
+        selectAllRows('labor_estimates', 'id'),
+        selectAllRows('repair_tasks', 'id'),
+      ])
+
+      let queueRows = []
+      let queueAvailable = true
+
+      try {
+        queueRows = await selectAllRows('openlabor_import_queue', 'id, status')
+      } catch (queueError) {
+        console.warn('Queue status unavailable to the frontend:', queueError)
+        queueAvailable = false
+      }
+
+      setDataStatusSummary(
+        buildDataStatusSummary({
+          vehicles: vehiclesRows,
+          vehicleScores: vehicleScoreRows,
+          repairScores: repairScoreRows,
+          laborEstimates: laborEstimateRows,
+          repairTasks: repairTaskRows,
+          queueRows,
+          queueAvailable,
+        }),
+      )
+      setDataStatusState('loaded')
+    } catch (error) {
+      console.error('Error loading data status:', error)
+      setDataStatusSummary(null)
+      setDataStatusState('error')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeView === 'status' && dataStatusState === 'idle') {
+      loadDataStatus()
+    }
+  }, [activeView, dataStatusState, loadDataStatus])
 
   const yearOptions = useMemo(() => getUniqueYears(vehicles), [vehicles])
   const makeOptions = useMemo(
@@ -921,6 +1094,30 @@ function App() {
 
     return `Showing ${count} ${count === 1 ? 'repair' : 'repairs'}`
   }, [repairViewFilter, visibleRepairs.length])
+  const dataStatusCards = dataStatusSummary
+    ? [
+        { label: 'Vehicles', value: dataStatusSummary.counts.vehicles },
+        {
+          label: 'Engine-specific vehicles',
+          value: dataStatusSummary.counts.engineSpecificVehicles,
+        },
+        {
+          label: 'General model vehicles',
+          value: dataStatusSummary.counts.genericVehicles,
+        },
+        { label: 'Vehicle scores', value: dataStatusSummary.counts.vehicleScores },
+        { label: 'Repair scores', value: dataStatusSummary.counts.repairScores },
+        { label: 'Labor estimates', value: dataStatusSummary.counts.laborEstimates },
+        { label: 'Repair tasks', value: dataStatusSummary.counts.repairTasks },
+        {
+          label: 'Queue total',
+          value:
+            dataStatusSummary.counts.queueTotal === null
+              ? 'Unavailable'
+              : dataStatusSummary.counts.queueTotal,
+        },
+      ]
+    : []
 
   return (
     <div className="app-shell">
@@ -961,6 +1158,13 @@ function App() {
                 onClick={() => setActiveView('rankings')}
               >
                 Browse Rankings
+              </button>
+              <button
+                className={activeView === 'status' ? 'active' : ''}
+                type="button"
+                onClick={() => setActiveView('status')}
+              >
+                Data Status
               </button>
             </div>
 
@@ -1178,6 +1382,122 @@ function App() {
                     />
                   </label>
                 </div>
+              </section>
+            )}
+
+            {activeView === 'status' && (
+              <section className="status-panel" aria-label="Data status">
+                <div className="status-panel-header">
+                  <div className="panel-heading">
+                    <p className="eyebrow">Database health</p>
+                    <h2>Data Status</h2>
+                  </div>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={loadDataStatus}
+                    disabled={dataStatusState === 'loading'}
+                  >
+                    {dataStatusState === 'loading' ? 'Refreshing...' : 'Refresh status'}
+                  </button>
+                </div>
+
+                {dataStatusState === 'loading' && (
+                  <article className="status-card">Loading data status...</article>
+                )}
+
+                {dataStatusState === 'error' && (
+                  <article className="status-card error">
+                    Something went wrong loading data status.
+                  </article>
+                )}
+
+                {dataStatusState === 'loaded' && dataStatusSummary && (
+                  <div className="data-status-content">
+                    <div className="status-metric-grid">
+                      {dataStatusCards.map((card) => (
+                        <article className="status-metric-card" key={card.label}>
+                          <span>{card.label}</span>
+                          <strong>{card.value}</strong>
+                        </article>
+                      ))}
+                    </div>
+
+                    <article className="status-detail-card">
+                      <div>
+                        <h3>Queue status</h3>
+                        {!dataStatusSummary.queueAvailable && (
+                          <p className="helper-text">
+                            Queue status is only available in local scripts.
+                          </p>
+                        )}
+                      </div>
+                      {dataStatusSummary.queueAvailable && (
+                        <div className="status-count-list">
+                          {QUEUE_STATUSES.map((queueStatus) => (
+                            <div key={queueStatus}>
+                              <span>{queueStatus}</span>
+                              <strong>
+                                {dataStatusSummary.queueStatusCounts[queueStatus] ?? 0}
+                              </strong>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </article>
+
+                    <div className="status-detail-grid">
+                      <article className="status-detail-card">
+                        <h3>Vehicles missing scores</h3>
+                        <strong className="status-large-number">
+                          {dataStatusSummary.missingScoreVehicles.length}
+                        </strong>
+                        {dataStatusSummary.missingScoreVehicles.length === 0 ? (
+                          <p>No vehicles are missing scores.</p>
+                        ) : (
+                          <ul className="compact-list">
+                            {dataStatusSummary.missingScoreVehicles
+                              .slice(0, 10)
+                              .map((vehicle) => (
+                                <li key={vehicle.id}>
+                                  {getVehicleTitle(vehicle)} -{' '}
+                                  {getVehicleConfigurationLabel(vehicle)}
+                                </li>
+                              ))}
+                          </ul>
+                        )}
+                      </article>
+
+                      <article className="status-detail-card">
+                        <h3>Top make/model groups</h3>
+                        <ul className="compact-list">
+                          {dataStatusSummary.topMakeModelGroups.map((group) => (
+                            <li key={group.label}>
+                              <span>{group.label}</span>
+                              <strong>{group.count}</strong>
+                            </li>
+                          ))}
+                        </ul>
+                      </article>
+
+                      <article className="status-detail-card">
+                        <h3>Most engine variants</h3>
+                        <ul className="compact-list">
+                          {dataStatusSummary.topVariantGroups.map((group) => (
+                            <li key={group.label}>
+                              <span>{group.label}</span>
+                              <strong>{group.count} variants</strong>
+                            </li>
+                          ))}
+                        </ul>
+                      </article>
+                    </div>
+
+                    <article className="status-recommendation">
+                      {dataStatusSummary.recommendation}
+                    </article>
+                  </div>
+                )}
               </section>
             )}
           </div>
