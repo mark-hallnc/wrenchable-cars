@@ -41,6 +41,7 @@ const defaultVehicle = {
   modelSlug: 'f-150',
   engine: null,
   engineSlug: null,
+  fuelType: null,
 };
 
 function slugify(value) {
@@ -90,6 +91,10 @@ function resolveVehicleOptions(options = {}) {
   const engine = engineValue === undefined || engineValue === null || String(engineValue).trim() === ''
     ? null
     : String(engineValue).trim();
+  const fuelTypeValue = options.fuelType === undefined ? defaultVehicle.fuelType : options.fuelType;
+  const fuelType = fuelTypeValue === undefined || fuelTypeValue === null || String(fuelTypeValue).trim() === ''
+    ? null
+    : String(fuelTypeValue).trim();
   const makeSlug = String(options.makeSlug ?? slugify(make)).trim().toLowerCase();
   const modelSlug = String(options.modelSlug ?? slugify(model)).trim().toLowerCase();
   const engineSlugValue = options.engineSlug === undefined ? (engine ? slugify(engine) : null) : options.engineSlug;
@@ -105,6 +110,7 @@ function resolveVehicleOptions(options = {}) {
     modelSlug,
     engine,
     engineSlug,
+    fuelType,
   };
 }
 
@@ -399,6 +405,10 @@ async function fetchOpenLaborData(vehicle) {
   url.searchParams.set('model', vehicle.modelSlug);
   url.searchParams.set('year', String(vehicle.year));
 
+  if (vehicle.engineSlug) {
+    url.searchParams.set('engine', vehicle.engineSlug);
+  }
+
   const response = await fetch(url, {
     method: 'GET',
     headers: {
@@ -559,7 +569,7 @@ export async function importOpenLaborVehicle(options = {}) {
         source_make_slug: vehicle.makeSlug,
         source_model_slug: vehicle.modelSlug,
         source_engine_slug: vehicle.engineSlug ?? null,
-        fuel_type: null,
+        fuel_type: vehicle.fuelType ?? null,
       },
       'id',
     );

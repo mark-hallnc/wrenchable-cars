@@ -12,6 +12,7 @@
     "import:openlabor": "node scripts/import-openlabor-vehicle.js",
     "import:openlabor:queue": "node scripts/run-openlabor-queue.js",
     "seed:openlabor:queue": "node scripts/seed-openlabor-queue.js",
+    "seed:openlabor:engines": "node scripts/seed-openlabor-engine-queue.js",
     "recalculate:scores": "node scripts/recalculate-wrenchability-scores.js"
   },
   "dependencies": {
