@@ -257,13 +257,13 @@ const getVehicleTitle = (vehicle) =>
 
 const getVehicleScoreValue = (vehicle) => Number(vehicle?.vehicleScore?.overall_score)
 
-const getEngineLabel = (vehicle) => {
+const getVehicleConfigurationLabel = (vehicle) => {
   const engine = String(vehicle?.engine ?? '').trim()
   const sourceEngineSlug = String(vehicle?.source_engine_slug ?? '').trim()
+  const trim = String(vehicle?.trim ?? '').trim()
+  const configuration = engine || sourceEngineSlug || 'Base / unspecified engine'
 
-  if (engine) return engine
-  if (sourceEngineSlug) return sourceEngineSlug
-  return 'Base / unspecified engine'
+  return trim ? `${configuration} - ${trim}` : configuration
 }
 
 const getEngineKey = (vehicle) => {
@@ -273,18 +273,21 @@ const getEngineKey = (vehicle) => {
   return sourceEngineSlug || engine || 'base-unspecified'
 }
 
-const hasSpecificEngine = (vehicle) =>
+const hasSpecificConfiguration = (vehicle) =>
   Boolean(normalizeText(vehicle?.engine) || normalizeText(vehicle?.source_engine_slug))
 
+const getConfigurationBadgeLabel = (vehicle) =>
+  hasSpecificConfiguration(vehicle) ? 'Engine-specific data' : 'General model data'
+
 const hasSpecificEngineSibling = (vehicle, allVehicles) =>
-  !hasSpecificEngine(vehicle) &&
+  !hasSpecificConfiguration(vehicle) &&
   (allVehicles ?? []).some(
     (candidate) =>
       String(candidate.id) !== String(vehicle.id) &&
       String(candidate.year) === String(vehicle.year) &&
       candidate.make === vehicle.make &&
       candidate.model === vehicle.model &&
-      hasSpecificEngine(candidate),
+      hasSpecificConfiguration(candidate),
   )
 
 const isGenericVehicleHidden = (vehicle, allVehicles) =>
@@ -461,7 +464,7 @@ const getEngineOptions = (vehicles, year, make, model) => {
     optionsByKey.set(key, {
       id: vehicle.id,
       key,
-      label: getEngineLabel(vehicle),
+      label: getVehicleConfigurationLabel(vehicle),
       sourceEngineSlug: vehicle.source_engine_slug ?? '',
       hasKnownEngine: Boolean(
         String(vehicle.engine ?? '').trim() || String(vehicle.source_engine_slug ?? '').trim(),
@@ -820,6 +823,12 @@ function App() {
   const vehicleTitle = result
     ? `${result.vehicle.year} ${result.vehicle.make} ${result.vehicle.model}`
     : `${selectedYear} ${selectedMake} ${selectedModel}`
+  const vehicleConfigurationLabel = result
+    ? getVehicleConfigurationLabel(result.vehicle)
+    : ''
+  const vehicleConfigurationBadge = result
+    ? getConfigurationBadgeLabel(result.vehicle)
+    : ''
   const rankingMakeOptions = useMemo(
     () => [...new Set(rankedVehicles.map((vehicle) => vehicle.make))]
       .filter(Boolean)
@@ -1185,7 +1194,12 @@ function App() {
                     <div className="ranking-card-main">
                       <span className="meta-label">Vehicle</span>
                       <h3>{getVehicleTitle(vehicle)}</h3>
-                      {vehicle.engine && <p>{vehicle.engine}</p>}
+                      <p className="configuration-text">
+                        {getVehicleConfigurationLabel(vehicle)}
+                      </p>
+                      <span className="configuration-badge">
+                        {getConfigurationBadgeLabel(vehicle)}
+                      </span>
                       {vehicle.vehicleScore && <p>{getVehicleVerdict(vehicle.vehicleScore)}</p>}
                     </div>
                     <div className="ranking-card-score">
@@ -1242,6 +1256,8 @@ function App() {
                     <div>
                       <span className="meta-label">Vehicle</span>
                       <h3>{vehicleTitle}</h3>
+                      <p className="configuration-text">{vehicleConfigurationLabel}</p>
+                      <span className="configuration-badge">{vehicleConfigurationBadge}</span>
                     </div>
                     <div className="score-badge">
                       <span>Overall Wrenchability Score</span>
