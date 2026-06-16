@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabaseClient'
 import './App.css'
 
+const BRAND = {
+  name: 'Wrenchable Cars',
+  tagline: 'Find cars that are easier to fix, maintain, and own.',
+  shortTagline: 'Rank cars by repairability.',
+}
+
 const scoreClass = (score) => {
   const numericScore = Number(score)
 
@@ -1646,9 +1652,11 @@ function App() {
   return (
     <div className="app-shell">
       <header className="site-header">
-        <a className="brand" href="#top" aria-label="Wrenchable Cars home">
-          <span className="brand-mark">WC</span>
-          <span>Wrenchable Cars</span>
+        <a className="brand" href="#top" aria-label={`${BRAND.name} home`}>
+          <span className="brand-mark" aria-hidden="true">
+            {BRAND.name.split(' ').map((word) => word[0]).join('')}
+          </span>
+          <span>{BRAND.name}</span>
         </a>
         <nav className="main-nav" aria-label="Primary navigation">
           <a href="#search">Search</a>
@@ -1659,11 +1667,14 @@ function App() {
       <main id="top">
         <section className="hero-section">
           <div className="hero-content">
-            <p className="eyebrow">Used-car repair difficulty, before you buy</p>
-            <h1>Before you buy it, know how hard it is to fix.</h1>
+            <p className="eyebrow">{BRAND.shortTagline}</p>
+            <h1>{BRAND.name}</h1>
             <p className="hero-copy">
-              Wrenchable Cars helps shoppers spot repair-heavy vehicles by turning
-              common ownership jobs into plain-English difficulty scores.
+              {BRAND.tagline}
+            </p>
+            <p className="hero-support">
+              Compare vehicles by common repair labor times, maintenance difficulty,
+              and overall DIY-friendliness.
             </p>
           </div>
 
