@@ -177,6 +177,69 @@ const writeStoredCompareVehicleIds = (ids) => {
   }
 }
 
+const normalizeUrlVehicleIds = (value) =>
+  normalizeCompareVehicleIds(String(value ?? '').split(','))
+
+const getInitialUrlState = () => {
+  if (typeof window === 'undefined') {
+    return { view: 'search', vehicleId: '', compareIds: [] }
+  }
+
+  const params = new URLSearchParams(window.location.search)
+  const view = params.get('view') ?? 'search'
+
+  return {
+    view,
+    vehicleId: String(params.get('vehicleId') ?? '').trim(),
+    compareIds: normalizeUrlVehicleIds(params.get('vehicles')),
+  }
+}
+
+const buildShareUrl = (params) => {
+  if (typeof window === 'undefined') return ''
+
+  const url = new URL(window.location.href)
+  url.search = ''
+
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== null && value !== undefined && value !== '') {
+      url.searchParams.set(key, value)
+    }
+  }
+
+  return url.toString()
+}
+
+const updateBrowserUrl = (params, mode = 'push') => {
+  if (typeof window === 'undefined' || !window.history) return
+
+  const url = buildShareUrl(params)
+
+  if (!url || url === window.location.href) return
+
+  if (mode === 'replace') {
+    window.history.replaceState({}, '', url)
+    return
+  }
+
+  window.history.pushState({}, '', url)
+}
+
+const copyToClipboard = async (text) => {
+  if (!text) return false
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch (error) {
+    console.warn('Clipboard API unavailable:', error)
+  }
+
+  return false
+}
+
 const createCompareSlotsFromVehicles = (vehicleRows) => {
   const slots = normalizeCompareVehicleIds(vehicleRows.map((vehicle) => vehicle?.id))
     .map((vehicleId) => {
@@ -1205,6 +1268,9 @@ function App() {
   const [compareError, setCompareError] = useState('')
   const [compareMessage, setCompareMessage] = useState('')
   const [savedCompareHydrated, setSavedCompareHydrated] = useState(false)
+  const [initialUrlHandled, setInitialUrlHandled] = useState(false)
+  const [vehicleLinkMessage, setVehicleLinkMessage] = useState('')
+  const [comparisonLinkMessage, setComparisonLinkMessage] = useState('')
   const [comparisonVehicles, setComparisonVehicles] = useState([])
   const [compareRepairView, setCompareRepairView] = useState('top-ownership')
   const [compareRepairSort, setCompareRepairSort] = useState('recommended')
@@ -1467,9 +1533,13 @@ function App() {
     setRepairSearchText('')
   }
 
-  const loadVehicleDetails = async (vehicleLookup) => {
+  const loadVehicleDetails = async (vehicleLookup, options = {}) => {
+    const shouldUpdateUrl = options.updateUrl ?? true
+    const historyMode = options.historyMode ?? 'push'
+
     setStatus('loading')
     setResult(null)
+    setVehicleLinkMessage('')
     resetRepairControls()
 
     try {
@@ -1552,6 +1622,12 @@ function App() {
         vehicleScore: vehicleScoreResponse.data,
         repairs,
       })
+      if (shouldUpdateUrl) {
+        updateBrowserUrl(
+          { view: 'vehicle', vehicleId: vehicle.id },
+          historyMode,
+        )
+      }
       setStatus('success')
     } catch (error) {
       console.error('Error loading Wrenchability data:', error)
@@ -1579,6 +1655,52 @@ function App() {
     await loadVehicleDetails(vehicle)
   }
 
+  const goToView = (view) => {
+    setActiveView(view)
+
+    if (view === 'rankings') {
+      updateBrowserUrl({ view: 'rankings' })
+      return
+    }
+
+    if (view === 'compare') {
+      updateBrowserUrl({
+        view: 'compare',
+        vehicles: selectedCompareIds.length ? selectedCompareIds.join(',') : '',
+      })
+      return
+    }
+
+    if (view === 'search') {
+      if (status === 'success' && result?.vehicle?.id) {
+        updateBrowserUrl({ view: 'vehicle', vehicleId: result.vehicle.id })
+      } else {
+        updateBrowserUrl({ view: 'search' })
+      }
+    }
+  }
+
+  const copyVehicleLink = async () => {
+    if (!result?.vehicle?.id) return
+
+    const url = buildShareUrl({ view: 'vehicle', vehicleId: result.vehicle.id })
+    const copied = await copyToClipboard(url)
+
+    setVehicleLinkMessage(copied ? 'Link copied.' : url)
+  }
+
+  const copyComparisonLink = async () => {
+    if (selectedCompareIds.length < 2) return
+
+    const url = buildShareUrl({
+      view: 'compare',
+      vehicles: selectedCompareIds.join(','),
+    })
+    const copied = await copyToClipboard(url)
+
+    setComparisonLinkMessage(copied ? 'Comparison link copied.' : url)
+  }
+
   const resetCompareResultState = () => {
     setCompareStatus('idle')
     setCompareError('')
@@ -1602,10 +1724,56 @@ function App() {
       setCompareSlots(createCompareSlotsFromVehicles(selectedVehicles))
       writeStoredCompareVehicleIds(validIds)
       resetCompareResultState()
+      setComparisonLinkMessage('')
 
       return validIds
     },
     [vehicles],
+  )
+
+  const hydrateCompareFromIds = useCallback(
+    async (ids) => {
+      const normalizedIds = normalizeCompareVehicleIds(ids)
+
+      if (normalizedIds.length === 0) {
+        setSavedCompareHydrated(true)
+        return []
+      }
+
+      try {
+        if (!supabase) {
+          throw new Error('Supabase is not configured.')
+        }
+
+        const { data, error } = await supabase
+          .from('vehicles')
+          .select('id, year, make, model, trim, engine, source_engine_slug')
+          .in('id', normalizedIds)
+
+        if (error) throw error
+
+        const vehiclesById = new Map((data ?? []).map((vehicle) => [
+          String(vehicle.id),
+          vehicle,
+        ]))
+        const validVehicles = normalizedIds
+          .map((id) => vehiclesById.get(String(id)))
+          .filter(Boolean)
+        const validIds = setCompareVehicleIds(
+          validVehicles.map((vehicle) => vehicle.id),
+          validVehicles,
+        )
+
+        setSavedCompareHydrated(true)
+        return validIds
+      } catch (error) {
+        console.warn('Unable to restore comparison vehicles:', error)
+        writeStoredCompareVehicleIds([])
+        setSavedCompareHydrated(true)
+        return []
+      }
+    },
+    [setCompareVehicleIds],
   )
 
   const loadSavedCompareVehicles = useCallback(async () => {
@@ -1616,43 +1784,69 @@ function App() {
       return
     }
 
-    try {
-      if (!supabase) {
-        throw new Error('Supabase is not configured.')
-      }
-
-      const { data, error } = await supabase
-        .from('vehicles')
-        .select('id, year, make, model, trim, engine, source_engine_slug')
-        .in('id', savedIds)
-
-      if (error) throw error
-
-      const vehiclesById = new Map((data ?? []).map((vehicle) => [
-        String(vehicle.id),
-        vehicle,
-      ]))
-      const validVehicles = savedIds
-        .map((id) => vehiclesById.get(String(id)))
-        .filter(Boolean)
-
-      setCompareVehicleIds(
-        validVehicles.map((vehicle) => vehicle.id),
-        validVehicles,
-      )
-    } catch (error) {
-      console.warn('Unable to restore saved comparison vehicles:', error)
-      writeStoredCompareVehicleIds([])
-    } finally {
-      setSavedCompareHydrated(true)
-    }
-  }, [setCompareVehicleIds])
+    await hydrateCompareFromIds(savedIds)
+  }, [hydrateCompareFromIds])
 
   useEffect(() => {
+    const initialUrlState = getInitialUrlState()
+
+    if (initialUrlState.view === 'compare') {
+      return
+    }
+
     if (!savedCompareHydrated) {
       loadSavedCompareVehicles()
     }
   }, [loadSavedCompareVehicles, savedCompareHydrated])
+
+  useEffect(() => {
+    if (initialUrlHandled || vehicleOptionsStatus === 'loading') return
+
+    const applyInitialUrlState = async () => {
+      const initialUrlState = getInitialUrlState()
+
+      if (initialUrlState.view === 'vehicle' && initialUrlState.vehicleId) {
+        setActiveView('search')
+        await loadVehicleDetails(
+          { id: initialUrlState.vehicleId },
+          { historyMode: 'replace' },
+        )
+        setInitialUrlHandled(true)
+        return
+      }
+
+      if (initialUrlState.view === 'compare') {
+        setActiveView('compare')
+        const validIds = await hydrateCompareFromIds(initialUrlState.compareIds)
+        updateBrowserUrl(
+          {
+            view: 'compare',
+            vehicles: validIds.length ? validIds.join(',') : '',
+          },
+          'replace',
+        )
+        setInitialUrlHandled(true)
+        return
+      }
+
+      if (initialUrlState.view === 'rankings') {
+        setActiveView('rankings')
+        updateBrowserUrl({ view: 'rankings' }, 'replace')
+        setInitialUrlHandled(true)
+        return
+      }
+
+      setActiveView('search')
+      updateBrowserUrl({ view: 'search' }, 'replace')
+      setInitialUrlHandled(true)
+    }
+
+    applyInitialUrlState()
+  }, [
+    hydrateCompareFromIds,
+    initialUrlHandled,
+    vehicleOptionsStatus,
+  ])
 
   const updateCompareSlot = (slotIndex, updater) => {
     setCompareSlots((currentSlots) =>
@@ -1667,6 +1861,7 @@ function App() {
     )
     resetCompareResultState()
     setCompareMessage('')
+    setComparisonLinkMessage('')
   }
 
   const applyCompareVehicleSelection = (slotIndex, year, make, model) => {
@@ -1754,6 +1949,7 @@ function App() {
     setCompareStatus('idle')
     setCompareError('')
     setCompareMessage('')
+    setComparisonLinkMessage('')
     setCompareRepairView('top-ownership')
     setCompareRepairSort('recommended')
   }
@@ -1953,6 +2149,17 @@ function App() {
     () => [...new Set(compareSlots.map((slot) => slot.vehicleId).filter(Boolean))],
     [compareSlots],
   )
+  useEffect(() => {
+    if (activeView !== 'compare' || !initialUrlHandled) return
+
+    updateBrowserUrl(
+      {
+        view: 'compare',
+        vehicles: selectedCompareIds.length ? selectedCompareIds.join(',') : '',
+      },
+      'replace',
+    )
+  }, [activeView, initialUrlHandled, selectedCompareIds])
   const canCompare = selectedCompareIds.length >= 2
   const compareRepairRows = useMemo(
     () =>
@@ -2059,21 +2266,21 @@ function App() {
               <button
                 className={activeView === 'search' ? 'active' : ''}
                 type="button"
-                onClick={() => setActiveView('search')}
+                onClick={() => goToView('search')}
               >
                 Search by Vehicle
               </button>
               <button
                 className={activeView === 'rankings' ? 'active' : ''}
                 type="button"
-                onClick={() => setActiveView('rankings')}
+                onClick={() => goToView('rankings')}
               >
                 Browse Rankings
               </button>
               <button
                 className={activeView === 'compare' ? 'active' : ''}
                 type="button"
-                onClick={() => setActiveView('compare')}
+                onClick={() => goToView('compare')}
               >
                 Compare Vehicles
               </button>
@@ -2085,7 +2292,7 @@ function App() {
               <button
                 className="secondary-button"
                 type="button"
-                onClick={() => setActiveView('compare')}
+                onClick={() => goToView('compare')}
               >
                 Go to Compare
               </button>
@@ -2446,6 +2653,26 @@ function App() {
                   >
                     Clear comparison
                   </button>
+                  {canCompare && (
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={copyComparisonLink}
+                    >
+                      Copy comparison link
+                    </button>
+                  )}
+                  {comparisonLinkMessage && !comparisonLinkMessage.startsWith('http') && (
+                    <span className="copy-link-message">{comparisonLinkMessage}</span>
+                  )}
+                  {comparisonLinkMessage.startsWith('http') && (
+                    <input
+                      className="copy-link-input"
+                      readOnly
+                      value={comparisonLinkMessage}
+                      onFocus={(event) => event.target.select()}
+                    />
+                  )}
                 </div>
               </section>
             )}
@@ -2897,17 +3124,35 @@ function App() {
                     <button
                       className="secondary-button"
                       type="button"
-                      onClick={() => setActiveView('rankings')}
+                      onClick={() => goToView('rankings')}
                     >
                       Browse rankings
                     </button>
                     <button
                       className="secondary-button"
                       type="button"
-                      onClick={() => setActiveView('compare')}
+                      onClick={() => goToView('compare')}
                     >
                       Compare vehicles
                     </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={copyVehicleLink}
+                    >
+                      Copy link
+                    </button>
+                    {vehicleLinkMessage && !vehicleLinkMessage.startsWith('http') && (
+                      <span className="copy-link-message">{vehicleLinkMessage}</span>
+                    )}
+                    {vehicleLinkMessage.startsWith('http') && (
+                      <input
+                        className="copy-link-input"
+                        readOnly
+                        value={vehicleLinkMessage}
+                        onFocus={(event) => event.target.select()}
+                      />
+                    )}
                   </div>
 
                   <div className="score-explanation-card">
