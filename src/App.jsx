@@ -90,6 +90,8 @@ const RANKING_LIMITS = ['10', '25', '50', '100']
 
 const QUEUE_STATUSES = ['pending', 'running', 'completed', 'skipped', 'failed']
 
+const COMPARE_STORAGE_KEY = 'wrenchable_compare_vehicle_ids'
+
 const COMPARE_REPAIR_VIEWS = [
   { value: 'top-ownership', label: 'Top Ownership Repairs' },
   { value: 'shared', label: 'All Shared Repairs' },
@@ -111,6 +113,68 @@ const createCompareSlot = () => ({
   engineKey: '',
   vehicleId: '',
 })
+
+const normalizeCompareVehicleIds = (ids) =>
+  [...new Set((Array.isArray(ids) ? ids : []).map((id) => String(id ?? '').trim()).filter(Boolean))]
+    .slice(0, 3)
+
+const getCompareVehicleIdsFromSlots = (slots) =>
+  normalizeCompareVehicleIds(slots.map((slot) => slot.vehicleId))
+
+const readStoredCompareVehicleIds = () => {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return []
+
+    const storedValue = window.localStorage.getItem(COMPARE_STORAGE_KEY)
+    if (!storedValue) return []
+
+    const parsedValue = JSON.parse(storedValue)
+    return normalizeCompareVehicleIds(parsedValue)
+  } catch (error) {
+    console.warn('Unable to read saved comparison vehicles:', error)
+    return []
+  }
+}
+
+const writeStoredCompareVehicleIds = (ids) => {
+  try {
+    if (typeof window === 'undefined' || !window.localStorage) return
+
+    const normalizedIds = normalizeCompareVehicleIds(ids)
+
+    if (normalizedIds.length === 0) {
+      window.localStorage.removeItem(COMPARE_STORAGE_KEY)
+      return
+    }
+
+    window.localStorage.setItem(COMPARE_STORAGE_KEY, JSON.stringify(normalizedIds))
+  } catch (error) {
+    console.warn('Unable to save comparison vehicles:', error)
+  }
+}
+
+const createCompareSlotsFromVehicles = (vehicleRows) => {
+  const slots = normalizeCompareVehicleIds(vehicleRows.map((vehicle) => vehicle?.id))
+    .map((vehicleId) => {
+      const vehicle = vehicleRows.find((row) => String(row?.id) === String(vehicleId))
+
+      return vehicle
+        ? {
+            year: String(vehicle.year ?? ''),
+            make: vehicle.make ?? '',
+            model: vehicle.model ?? '',
+            engineKey: getEngineKey(vehicle),
+            vehicleId: String(vehicle.id ?? ''),
+          }
+        : createCompareSlot()
+    })
+
+  while (slots.length < 3) {
+    slots.push(createCompareSlot())
+  }
+
+  return slots.slice(0, 3)
+}
 
 const VEHICLE_VERDICT =
   'This score is based on common repair labor times and how approachable the vehicle is for typical maintenance and repair work.'
@@ -797,6 +861,7 @@ function App() {
   const [compareStatus, setCompareStatus] = useState('idle')
   const [compareError, setCompareError] = useState('')
   const [compareMessage, setCompareMessage] = useState('')
+  const [savedCompareHydrated, setSavedCompareHydrated] = useState(false)
   const [comparisonVehicles, setComparisonVehicles] = useState([])
   const [compareRepairView, setCompareRepairView] = useState('top-ownership')
   const [compareRepairSort, setCompareRepairSort] = useState('recommended')
@@ -1171,14 +1236,93 @@ function App() {
     await loadVehicleDetails(vehicle)
   }
 
-  const updateCompareSlot = (slotIndex, updater) => {
-    setCompareSlots((currentSlots) =>
-      currentSlots.map((slot, index) =>
-        index === slotIndex ? updater(slot) : slot,
-      ),
-    )
+  const resetCompareResultState = () => {
     setCompareStatus('idle')
     setCompareError('')
+    setComparisonVehicles([])
+  }
+
+  const setCompareVehicleIds = useCallback(
+    (ids, availableVehicles = []) => {
+      const normalizedIds = normalizeCompareVehicleIds(ids)
+      const vehiclesById = new Map(
+        [...vehicles, ...availableVehicles].map((vehicle) => [
+          String(vehicle.id),
+          vehicle,
+        ]),
+      )
+      const selectedVehicles = normalizedIds
+        .map((id) => vehiclesById.get(String(id)))
+        .filter(Boolean)
+      const validIds = selectedVehicles.map((vehicle) => String(vehicle.id))
+
+      setCompareSlots(createCompareSlotsFromVehicles(selectedVehicles))
+      writeStoredCompareVehicleIds(validIds)
+      resetCompareResultState()
+
+      return validIds
+    },
+    [vehicles],
+  )
+
+  const loadSavedCompareVehicles = useCallback(async () => {
+    const savedIds = readStoredCompareVehicleIds()
+
+    if (savedIds.length === 0) {
+      setSavedCompareHydrated(true)
+      return
+    }
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data, error } = await supabase
+        .from('vehicles')
+        .select('id, year, make, model, trim, engine, source_engine_slug')
+        .in('id', savedIds)
+
+      if (error) throw error
+
+      const vehiclesById = new Map((data ?? []).map((vehicle) => [
+        String(vehicle.id),
+        vehicle,
+      ]))
+      const validVehicles = savedIds
+        .map((id) => vehiclesById.get(String(id)))
+        .filter(Boolean)
+
+      setCompareVehicleIds(
+        validVehicles.map((vehicle) => vehicle.id),
+        validVehicles,
+      )
+    } catch (error) {
+      console.warn('Unable to restore saved comparison vehicles:', error)
+      writeStoredCompareVehicleIds([])
+    } finally {
+      setSavedCompareHydrated(true)
+    }
+  }, [setCompareVehicleIds])
+
+  useEffect(() => {
+    if (!savedCompareHydrated) {
+      loadSavedCompareVehicles()
+    }
+  }, [loadSavedCompareVehicles, savedCompareHydrated])
+
+  const updateCompareSlot = (slotIndex, updater) => {
+    setCompareSlots((currentSlots) =>
+      {
+        const nextSlots = currentSlots.map((slot, index) =>
+        index === slotIndex ? updater(slot) : slot,
+        )
+
+        writeStoredCompareVehicleIds(getCompareVehicleIdsFromSlots(nextSlots))
+        return nextSlots
+      },
+    )
+    resetCompareResultState()
     setCompareMessage('')
   }
 
@@ -1228,6 +1372,11 @@ function App() {
     }))
   }
 
+  const removeCompareSlot = (slotIndex) => {
+    updateCompareSlot(slotIndex, () => createCompareSlot())
+    setCompareMessage('Removed from comparison.')
+  }
+
   const addVehicleToCompare = (vehicle) => {
     const vehicleId = String(vehicle?.id ?? '')
 
@@ -1257,6 +1406,7 @@ function App() {
 
   const clearComparison = () => {
     setCompareSlots([createCompareSlot(), createCompareSlot(), createCompareSlot()])
+    writeStoredCompareVehicleIds([])
     setComparisonVehicles([])
     setCompareStatus('idle')
     setCompareError('')
@@ -1885,6 +2035,16 @@ function App() {
                           <p className="helper-text notice">
                             Choose an engine for accurate comparison.
                           </p>
+                        )}
+
+                        {slot.vehicleId && (
+                          <button
+                            className="secondary-button compare-remove-button"
+                            type="button"
+                            onClick={() => removeCompareSlot(slotIndex)}
+                          >
+                            Remove
+                          </button>
                         )}
                       </article>
                     )

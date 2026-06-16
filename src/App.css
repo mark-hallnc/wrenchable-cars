@@ -619,6 +619,11 @@ button:disabled {
   font-weight: 800;
 }
 
+.compare-remove-button {
+  justify-self: start;
+  min-height: 2.35rem;
+}
+
 .compare-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1110,6 +1115,10 @@ button:disabled {
   }
 
   .compare-actions button {
+    width: 100%;
+  }
+
+  .compare-remove-button {
     width: 100%;
   }
 
