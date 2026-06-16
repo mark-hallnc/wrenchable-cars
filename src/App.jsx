@@ -796,6 +796,7 @@ function App() {
   ])
   const [compareStatus, setCompareStatus] = useState('idle')
   const [compareError, setCompareError] = useState('')
+  const [compareMessage, setCompareMessage] = useState('')
   const [comparisonVehicles, setComparisonVehicles] = useState([])
   const [compareRepairView, setCompareRepairView] = useState('top-ownership')
   const [compareRepairSort, setCompareRepairSort] = useState('recommended')
@@ -1178,6 +1179,7 @@ function App() {
     )
     setCompareStatus('idle')
     setCompareError('')
+    setCompareMessage('')
   }
 
   const applyCompareVehicleSelection = (slotIndex, year, make, model) => {
@@ -1227,17 +1229,30 @@ function App() {
   }
 
   const addVehicleToCompare = (vehicle) => {
-    const openSlotIndex = compareSlots.findIndex((slot) => !slot.vehicleId)
-    const targetIndex = openSlotIndex >= 0 ? openSlotIndex : 0
+    const vehicleId = String(vehicle?.id ?? '')
 
-    updateCompareSlot(targetIndex, () => ({
+    if (!vehicleId) return
+
+    if (compareSlots.some((slot) => String(slot.vehicleId) === vehicleId)) {
+      setCompareMessage('Added to comparison.')
+      return
+    }
+
+    const openSlotIndex = compareSlots.findIndex((slot) => !slot.vehicleId)
+
+    if (openSlotIndex < 0) {
+      setCompareMessage('Comparison is full. Clear a slot or clear comparison first.')
+      return
+    }
+
+    updateCompareSlot(openSlotIndex, () => ({
       year: String(vehicle.year ?? ''),
       make: vehicle.make ?? '',
       model: vehicle.model ?? '',
       engineKey: getEngineKey(vehicle),
-      vehicleId: String(vehicle.id ?? ''),
+      vehicleId,
     }))
-    setActiveView('compare')
+    setCompareMessage('Added to comparison.')
   }
 
   const clearComparison = () => {
@@ -1245,6 +1260,7 @@ function App() {
     setComparisonVehicles([])
     setCompareStatus('idle')
     setCompareError('')
+    setCompareMessage('')
     setCompareRepairView('top-ownership')
     setCompareRepairSort('recommended')
   }
@@ -1530,6 +1546,18 @@ function App() {
                 onClick={() => setActiveView('status')}
               >
                 Data Status
+              </button>
+            </div>
+
+            <div className="compare-status-bar" aria-live="polite">
+              <span>Compare: {selectedCompareIds.length} of 3 selected</span>
+              {compareMessage && <em>{compareMessage}</em>}
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setActiveView('compare')}
+              >
+                Go to Compare
               </button>
             </div>
 
@@ -2064,8 +2092,11 @@ function App() {
                         className="secondary-button"
                         type="button"
                         onClick={() => addVehicleToCompare(vehicle)}
+                        disabled={selectedCompareIds.includes(String(vehicle.id))}
                       >
-                        Add to compare
+                        {selectedCompareIds.includes(String(vehicle.id))
+                          ? 'Added'
+                          : 'Add to compare'}
                       </button>
                     </div>
                   </article>
@@ -2264,6 +2295,16 @@ function App() {
                       <h3>{vehicleTitle}</h3>
                       <p className="configuration-text">{vehicleConfigurationLabel}</p>
                       <span className="configuration-badge">{vehicleConfigurationBadge}</span>
+                      <button
+                        className="secondary-button result-compare-button"
+                        type="button"
+                        onClick={() => addVehicleToCompare(result.vehicle)}
+                        disabled={selectedCompareIds.includes(String(result.vehicle.id))}
+                      >
+                        {selectedCompareIds.includes(String(result.vehicle.id))
+                          ? 'Added'
+                          : 'Add to compare'}
+                      </button>
                     </div>
                     <div className="score-badge">
                       <span>Overall Wrenchability Score</span>
