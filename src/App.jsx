@@ -90,6 +90,28 @@ const RANKING_LIMITS = ['10', '25', '50', '100']
 
 const QUEUE_STATUSES = ['pending', 'running', 'completed', 'skipped', 'failed']
 
+const COMPARE_REPAIR_VIEWS = [
+  { value: 'top-ownership', label: 'Top Ownership Repairs' },
+  { value: 'shared', label: 'All Shared Repairs' },
+  { value: 'differences', label: 'Biggest Differences' },
+]
+
+const COMPARE_REPAIR_SORTS = [
+  { value: 'recommended', label: 'Recommended' },
+  { value: 'average-easiest', label: 'Easiest average first' },
+  { value: 'average-hardest', label: 'Hardest average first' },
+  { value: 'labor-spread', label: 'Biggest labor-hour spread' },
+  { value: 'name-asc', label: 'Repair name A-Z' },
+]
+
+const createCompareSlot = () => ({
+  year: '',
+  make: '',
+  model: '',
+  engineKey: '',
+  vehicleId: '',
+})
+
 const VEHICLE_VERDICT =
   'This score is based on common repair labor times and how approachable the vehicle is for typical maintenance and repair work.'
 
@@ -620,6 +642,127 @@ const buildDataStatusSummary = ({
   }
 }
 
+const getCompareRepairKey = (repair) =>
+  getRepairSlug(repair) || String(repair.repair_task_id ?? repair.repairTaskId ?? repair.id)
+
+const getCompareRepairRows = (comparisonVehicles, viewMode, sortMode) => {
+  const rowsByKey = new Map()
+
+  for (const comparisonVehicle of comparisonVehicles) {
+    for (const repair of comparisonVehicle.repairs) {
+      const key = getCompareRepairKey(repair)
+
+      if (!rowsByKey.has(key)) {
+        rowsByKey.set(key, {
+          key,
+          name: getRepairName(repair),
+          slug: getRepairSlug(repair),
+          order: getTopOwnershipOrder(repair),
+          cells: new Map(),
+        })
+      }
+
+      rowsByKey.get(key).cells.set(String(comparisonVehicle.vehicle.id), repair)
+    }
+  }
+
+  const rows = [...rowsByKey.values()].map((row) => {
+    const repairs = [...row.cells.values()]
+    const hours = repairs.map(getRepairHours).filter(Number.isFinite)
+    const scores = repairs.map(getRepairScore).filter(Number.isFinite)
+    const minHours = hours.length > 0 ? Math.min(...hours) : null
+    const maxHours = hours.length > 0 ? Math.max(...hours) : null
+    const averageScore =
+      scores.length > 0
+        ? scores.reduce((total, score) => total + score, 0) / scores.length
+        : null
+
+    return {
+      ...row,
+      dataCount: repairs.length,
+      hoursCount: hours.length,
+      minHours,
+      laborSpread:
+        minHours !== null && maxHours !== null && hours.length >= 2
+          ? maxHours - minHours
+          : 0,
+      averageScore,
+    }
+  })
+
+  const filteredRows = rows.filter((row) => {
+    if (viewMode === 'top-ownership') {
+      return Number.isFinite(row.order)
+    }
+
+    if (viewMode === 'shared') {
+      return row.dataCount >= 2
+    }
+
+    return row.hoursCount >= 2 && row.laborSpread > 0
+  })
+
+  const sortRows = (first, second) => {
+    if (sortMode === 'average-easiest') {
+      return (
+        compareFiniteNumbers(first.averageScore, second.averageScore, 'desc') ||
+        first.name.localeCompare(second.name)
+      )
+    }
+
+    if (sortMode === 'average-hardest') {
+      return (
+        compareFiniteNumbers(first.averageScore, second.averageScore, 'asc') ||
+        first.name.localeCompare(second.name)
+      )
+    }
+
+    if (sortMode === 'labor-spread') {
+      return second.laborSpread - first.laborSpread || first.name.localeCompare(second.name)
+    }
+
+    if (sortMode === 'name-asc') {
+      return first.name.localeCompare(second.name)
+    }
+
+    if (viewMode === 'top-ownership') {
+      return (
+        compareNumbers(first.order, second.order) ||
+        first.name.localeCompare(second.name)
+      )
+    }
+
+    if (viewMode === 'differences') {
+      return second.laborSpread - first.laborSpread || first.name.localeCompare(second.name)
+    }
+
+    return first.name.localeCompare(second.name)
+  }
+
+  return filteredRows.sort(sortRows)
+}
+
+const getBestOverallText = (comparisonVehicles) => {
+  const scoredVehicles = comparisonVehicles.filter((item) =>
+    Number.isFinite(Number(item.vehicleScore?.overall_score)),
+  )
+
+  if (scoredVehicles.length === 0) return ''
+
+  const bestScore = Math.max(
+    ...scoredVehicles.map((item) => Number(item.vehicleScore.overall_score)),
+  )
+  const bestVehicles = scoredVehicles.filter(
+    (item) => Number(item.vehicleScore.overall_score) === bestScore,
+  )
+
+  if (bestVehicles.length > 1) {
+    return 'Best overall: Tie'
+  }
+
+  return `Best overall: ${getVehicleTitle(bestVehicles[0].vehicle)} - ${formatScore(bestScore)}/10`
+}
+
 function App() {
   const [activeView, setActiveView] = useState('search')
   const [selectedYear, setSelectedYear] = useState('2011')
@@ -646,6 +789,16 @@ function App() {
   const [rankingSearchText, setRankingSearchText] = useState('')
   const [rankingMinScore, setRankingMinScore] = useState('')
   const [rankingMaxScore, setRankingMaxScore] = useState('')
+  const [compareSlots, setCompareSlots] = useState([
+    createCompareSlot(),
+    createCompareSlot(),
+    createCompareSlot(),
+  ])
+  const [compareStatus, setCompareStatus] = useState('idle')
+  const [compareError, setCompareError] = useState('')
+  const [comparisonVehicles, setComparisonVehicles] = useState([])
+  const [compareRepairView, setCompareRepairView] = useState('top-ownership')
+  const [compareRepairSort, setCompareRepairSort] = useState('recommended')
 
   useEffect(() => {
     const loadVehicles = async () => {
@@ -1017,6 +1170,191 @@ function App() {
     await loadVehicleDetails(vehicle)
   }
 
+  const updateCompareSlot = (slotIndex, updater) => {
+    setCompareSlots((currentSlots) =>
+      currentSlots.map((slot, index) =>
+        index === slotIndex ? updater(slot) : slot,
+      ),
+    )
+    setCompareStatus('idle')
+    setCompareError('')
+  }
+
+  const applyCompareVehicleSelection = (slotIndex, year, make, model) => {
+    const options = getEngineOptions(vehicles, year, make, model)
+    const option = options.length === 1 ? options[0] : null
+
+    updateCompareSlot(slotIndex, () => ({
+      year,
+      make,
+      model,
+      engineKey: option?.key ?? '',
+      vehicleId: option ? String(option.id) : '',
+    }))
+  }
+
+  const handleCompareYearChange = (slotIndex, nextYear) => {
+    const nextMake = getUniqueMakes(vehicles, nextYear)[0] ?? ''
+    const nextModel = getUniqueModels(vehicles, nextYear, nextMake)[0] ?? ''
+
+    applyCompareVehicleSelection(slotIndex, nextYear, nextMake, nextModel)
+  }
+
+  const handleCompareMakeChange = (slotIndex, currentSlot, nextMake) => {
+    const nextModel = getUniqueModels(vehicles, currentSlot.year, nextMake)[0] ?? ''
+
+    applyCompareVehicleSelection(slotIndex, currentSlot.year, nextMake, nextModel)
+  }
+
+  const handleCompareModelChange = (slotIndex, currentSlot, nextModel) => {
+    applyCompareVehicleSelection(slotIndex, currentSlot.year, currentSlot.make, nextModel)
+  }
+
+  const handleCompareEngineChange = (slotIndex, currentSlot, nextEngineKey) => {
+    const options = getEngineOptions(
+      vehicles,
+      currentSlot.year,
+      currentSlot.make,
+      currentSlot.model,
+    )
+    const option = options.find((engineOption) => engineOption.key === nextEngineKey)
+
+    updateCompareSlot(slotIndex, (slot) => ({
+      ...slot,
+      engineKey: nextEngineKey,
+      vehicleId: option ? String(option.id) : '',
+    }))
+  }
+
+  const addVehicleToCompare = (vehicle) => {
+    const openSlotIndex = compareSlots.findIndex((slot) => !slot.vehicleId)
+    const targetIndex = openSlotIndex >= 0 ? openSlotIndex : 0
+
+    updateCompareSlot(targetIndex, () => ({
+      year: String(vehicle.year ?? ''),
+      make: vehicle.make ?? '',
+      model: vehicle.model ?? '',
+      engineKey: getEngineKey(vehicle),
+      vehicleId: String(vehicle.id ?? ''),
+    }))
+    setActiveView('compare')
+  }
+
+  const clearComparison = () => {
+    setCompareSlots([createCompareSlot(), createCompareSlot(), createCompareSlot()])
+    setComparisonVehicles([])
+    setCompareStatus('idle')
+    setCompareError('')
+    setCompareRepairView('top-ownership')
+    setCompareRepairSort('recommended')
+  }
+
+  const loadComparison = async () => {
+    const selectedIds = [
+      ...new Set(compareSlots.map((slot) => slot.vehicleId).filter(Boolean)),
+    ]
+
+    if (selectedIds.length < 2) return
+
+    setCompareStatus('loading')
+    setCompareError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const [vehiclesResponse, scoresResponse, repairScoresResponse] = await Promise.all([
+        supabase
+          .from('vehicles')
+          .select('id, year, make, model, trim, engine, source_engine_slug')
+          .in('id', selectedIds),
+        supabase
+          .from('vehicle_scores')
+          .select('id, vehicle_id, overall_score, score_label, verdict')
+          .in('vehicle_id', selectedIds),
+        supabase
+          .from('repair_scores')
+          .select('id, vehicle_id, repair_task_id, labor_hours, wrenchability_score, score_label')
+          .in('vehicle_id', selectedIds),
+      ])
+
+      if (vehiclesResponse.error) throw vehiclesResponse.error
+      if (scoresResponse.error) throw scoresResponse.error
+      if (repairScoresResponse.error) throw repairScoresResponse.error
+
+      const repairScores = repairScoresResponse.data ?? []
+      const repairTaskIds = [...new Set(repairScores.map((repair) => repair.repair_task_id))]
+      const { data: repairTasks, error: repairTasksError } = repairTaskIds.length
+        ? await supabase
+            .from('repair_tasks')
+            .select('id, name, category, source_job_slug, display_order')
+            .in('id', repairTaskIds)
+        : { data: [], error: null }
+
+      if (repairTasksError) throw repairTasksError
+
+      const vehiclesById = new Map((vehiclesResponse.data ?? []).map((vehicle) => [
+        String(vehicle.id),
+        vehicle,
+      ]))
+      const scoresByVehicleId = new Map((scoresResponse.data ?? []).map((score) => [
+        String(score.vehicle_id),
+        score,
+      ]))
+      const tasksById = new Map((repairTasks ?? []).map((task) => [task.id, task]))
+      const repairsByVehicleId = new Map()
+
+      for (const repair of repairScores) {
+        const task = tasksById.get(repair.repair_task_id)
+        const vehicleId = String(repair.vehicle_id)
+
+        if (!repairsByVehicleId.has(vehicleId)) {
+          repairsByVehicleId.set(vehicleId, [])
+        }
+
+        repairsByVehicleId.get(vehicleId).push({
+          id: repair.id,
+          repair_task_id: repair.repair_task_id,
+          name: task?.name ?? 'Unknown repair task',
+          category: task?.category ?? '',
+          source_job_slug: task?.source_job_slug ?? '',
+          displayOrder: task?.display_order ?? 999,
+          repair_tasks: task ?? null,
+          hours: repair.labor_hours,
+          score: repair.wrenchability_score,
+          label: repair.score_label,
+        })
+      }
+
+      const comparison = selectedIds
+        .map((id) => {
+          const vehicle = vehiclesById.get(String(id))
+
+          if (!vehicle) return null
+
+          return {
+            vehicle,
+            vehicleScore: scoresByVehicleId.get(String(id)) ?? null,
+            repairs: (repairsByVehicleId.get(String(id)) ?? []).sort(
+              (first, second) =>
+                getRepairDisplayOrder(first) - getRepairDisplayOrder(second) ||
+                getRepairName(first).localeCompare(getRepairName(second)),
+            ),
+          }
+        })
+        .filter(Boolean)
+
+      setComparisonVehicles(comparison)
+      setCompareStatus('success')
+    } catch (error) {
+      console.error('Error loading comparison:', error)
+      setComparisonVehicles([])
+      setCompareError('Something went wrong loading the comparison.')
+      setCompareStatus('error')
+    }
+  }
+
   const hasResultsState = status !== 'idle'
   const vehicleTitle = result
     ? `${result.vehicle.year} ${result.vehicle.make} ${result.vehicle.model}`
@@ -1094,6 +1432,26 @@ function App() {
 
     return `Showing ${count} ${count === 1 ? 'repair' : 'repairs'}`
   }, [repairViewFilter, visibleRepairs.length])
+  const selectedCompareIds = useMemo(
+    () => [...new Set(compareSlots.map((slot) => slot.vehicleId).filter(Boolean))],
+    [compareSlots],
+  )
+  const canCompare = selectedCompareIds.length >= 2
+  const compareRepairRows = useMemo(
+    () =>
+      getCompareRepairRows(
+        comparisonVehicles,
+        compareRepairView,
+        compareRepairSort,
+      ),
+    [comparisonVehicles, compareRepairSort, compareRepairView],
+  )
+  const bestOverallText = useMemo(
+    () => getBestOverallText(comparisonVehicles),
+    [comparisonVehicles],
+  )
+  const comparisonHasMissingScores =
+    compareStatus === 'success' && comparisonVehicles.some((item) => !item.vehicleScore)
   const dataStatusCards = dataStatusSummary
     ? [
         { label: 'Vehicles', value: dataStatusSummary.counts.vehicles },
@@ -1158,6 +1516,13 @@ function App() {
                 onClick={() => setActiveView('rankings')}
               >
                 Browse Rankings
+              </button>
+              <button
+                className={activeView === 'compare' ? 'active' : ''}
+                type="button"
+                onClick={() => setActiveView('compare')}
+              >
+                Compare Vehicles
               </button>
               <button
                 className={activeView === 'status' ? 'active' : ''}
@@ -1385,6 +1750,138 @@ function App() {
               </section>
             )}
 
+            {activeView === 'compare' && (
+              <section className="compare-panel" aria-label="Compare vehicles">
+                <div className="panel-heading">
+                  <p className="eyebrow">Side-by-side</p>
+                  <h2>Compare Vehicles</h2>
+                </div>
+                <p className="helper-text">
+                  Pick two or three vehicle configurations to compare overall scores
+                  and common repair labor times.
+                </p>
+
+                <div className="compare-selector-grid">
+                  {compareSlots.map((slot, slotIndex) => {
+                    const slotYearOptions = yearOptions
+                    const slotMakeOptions = slot.year
+                      ? getUniqueMakes(vehicles, slot.year)
+                      : []
+                    const slotModelOptions = slot.year && slot.make
+                      ? getUniqueModels(vehicles, slot.year, slot.make)
+                      : []
+                    const slotEngineOptions = slot.year && slot.make && slot.model
+                      ? getEngineOptions(vehicles, slot.year, slot.make, slot.model)
+                      : []
+                    const slotNeedsEngine =
+                      slotEngineOptions.length > 1 && !slot.vehicleId
+
+                    return (
+                      <article className="compare-selector-card" key={`slot-${slotIndex}`}>
+                        <div className="compare-selector-heading">
+                          <h3>Vehicle {slotIndex + 1}</h3>
+                          {slotIndex === 2 && <span>Optional</span>}
+                        </div>
+
+                        <label>
+                          Year
+                          <select
+                            value={slot.year}
+                            onChange={(event) =>
+                              handleCompareYearChange(slotIndex, event.target.value)}
+                            disabled={isLoadingVehicleOptions || !hasVehicleOptions}
+                          >
+                            <option value="">Choose year</option>
+                            {slotYearOptions.map((year) => (
+                              <option key={year} value={year}>
+                                {year}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          Make
+                          <select
+                            value={slot.make}
+                            onChange={(event) =>
+                              handleCompareMakeChange(slotIndex, slot, event.target.value)}
+                            disabled={!slot.year}
+                          >
+                            <option value="">Choose make</option>
+                            {slotMakeOptions.map((make) => (
+                              <option key={make} value={make}>
+                                {make}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          Model
+                          <select
+                            value={slot.model}
+                            onChange={(event) =>
+                              handleCompareModelChange(slotIndex, slot, event.target.value)}
+                            disabled={!slot.year || !slot.make}
+                          >
+                            <option value="">Choose model</option>
+                            {slotModelOptions.map((model) => (
+                              <option key={model} value={model}>
+                                {model}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        {slotEngineOptions.length > 1 && (
+                          <label>
+                            Engine
+                            <select
+                              value={slot.engineKey}
+                              onChange={(event) =>
+                                handleCompareEngineChange(slotIndex, slot, event.target.value)}
+                              disabled={!slot.year || !slot.make || !slot.model}
+                            >
+                              <option value="">Choose an engine</option>
+                              {slotEngineOptions.map((option) => (
+                                <option key={option.key} value={option.key}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+
+                        {slotNeedsEngine && (
+                          <p className="helper-text notice">
+                            Choose an engine for accurate comparison.
+                          </p>
+                        )}
+                      </article>
+                    )
+                  })}
+                </div>
+
+                <div className="compare-actions">
+                  <button
+                    type="button"
+                    onClick={loadComparison}
+                    disabled={!canCompare || compareStatus === 'loading'}
+                  >
+                    {compareStatus === 'loading' ? 'Loading comparison...' : 'Compare'}
+                  </button>
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={clearComparison}
+                  >
+                    Clear comparison
+                  </button>
+                </div>
+              </section>
+            )}
+
             {activeView === 'status' && (
               <section className="status-panel" aria-label="Data status">
                 <div className="status-panel-header">
@@ -1563,10 +2060,174 @@ function App() {
                       <button type="button" onClick={() => handleRankingDetailsClick(vehicle)}>
                         View repair details
                       </button>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => addVehicleToCompare(vehicle)}
+                      >
+                        Add to compare
+                      </button>
                     </div>
                   </article>
                 ))}
               </div>
+            )}
+          </section>
+        )}
+
+        {activeView === 'compare' && (
+          <section className="compare-section" aria-live="polite">
+            {compareStatus === 'loading' && (
+              <article className="status-card">Loading comparison...</article>
+            )}
+
+            {compareStatus === 'error' && (
+              <article className="status-card error">
+                {compareError || 'Something went wrong loading the comparison.'}
+              </article>
+            )}
+
+            {compareStatus === 'success' && comparisonVehicles.length > 0 && (
+              <>
+                <div className="section-heading">
+                  <p className="eyebrow">Comparison result</p>
+                  <h2>Side-by-side Wrenchability</h2>
+                </div>
+
+                {bestOverallText && (
+                  <article className="best-overall-card">{bestOverallText}</article>
+                )}
+
+                {comparisonHasMissingScores && (
+                  <article className="status-card">
+                    One or more selected vehicles do not have Wrenchability scores yet.
+                  </article>
+                )}
+
+                <div className="compare-summary-grid">
+                  {comparisonVehicles.map(({ vehicle, vehicleScore }) => (
+                    <article className="compare-summary-card" key={vehicle.id}>
+                      <span className="meta-label">Vehicle</span>
+                      <h3>{getVehicleTitle(vehicle)}</h3>
+                      <p className="configuration-text">
+                        {getVehicleConfigurationLabel(vehicle)}
+                      </p>
+                      <span className="configuration-badge">
+                        {getConfigurationBadgeLabel(vehicle)}
+                      </span>
+                      <div className="compare-score-block">
+                        <span>Overall score</span>
+                        <strong>
+                          {vehicleScore
+                            ? `${formatScore(vehicleScore.overall_score)} / 10`
+                            : 'Pending'}
+                        </strong>
+                        {vehicleScore?.score_label && <em>{vehicleScore.score_label}</em>}
+                      </div>
+                      {vehicleScore && <p>{getVehicleVerdict(vehicleScore)}</p>}
+                    </article>
+                  ))}
+                </div>
+
+                <div className="compare-repairs-panel">
+                  <div className="section-heading compact">
+                    <p className="eyebrow">Common repair comparison</p>
+                    <h2>Labor time by repair</h2>
+                  </div>
+
+                  <div className="compare-repair-controls">
+                    <label>
+                      Show
+                      <select
+                        value={compareRepairView}
+                        onChange={(event) => setCompareRepairView(event.target.value)}
+                      >
+                        {COMPARE_REPAIR_VIEWS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label>
+                      Sort
+                      <select
+                        value={compareRepairSort}
+                        onChange={(event) => setCompareRepairSort(event.target.value)}
+                      >
+                        {COMPARE_REPAIR_SORTS.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+
+                  {compareRepairRows.length === 0 ? (
+                    <article className="empty-repairs">
+                      No shared repair data found for these vehicles.
+                    </article>
+                  ) : (
+                    <div className="compare-repair-table-wrap">
+                      <div className="compare-repair-table">
+                        <div
+                          className="compare-repair-header"
+                          style={{
+                            gridTemplateColumns: `minmax(190px, 1fr) repeat(${comparisonVehicles.length}, minmax(160px, 0.8fr))`,
+                          }}
+                        >
+                          <span>Repair</span>
+                          {comparisonVehicles.map(({ vehicle }) => (
+                            <span key={vehicle.id}>{getVehicleTitle(vehicle)}</span>
+                          ))}
+                        </div>
+
+                        {compareRepairRows.map((row) => (
+                          <div
+                            className="compare-repair-row"
+                            key={row.key}
+                            style={{
+                              gridTemplateColumns: `minmax(190px, 1fr) repeat(${comparisonVehicles.length}, minmax(160px, 0.8fr))`,
+                            }}
+                          >
+                            <div className="compare-repair-name">
+                              <strong>{row.name}</strong>
+                            </div>
+                            {comparisonVehicles.map(({ vehicle }) => {
+                              const repair = row.cells.get(String(vehicle.id))
+                              const hours = repair ? getRepairHours(repair) : null
+                              const isBest =
+                                repair &&
+                                row.minHours !== null &&
+                                Number.isFinite(hours) &&
+                                hours === row.minHours
+
+                              return (
+                                <div className="compare-repair-cell" key={vehicle.id}>
+                                  {repair ? (
+                                    <>
+                                      <div className="compare-cell-topline">
+                                        <strong>{Number(hours).toFixed(1)} hrs</strong>
+                                        {isBest && <span className="best-badge">Best</span>}
+                                      </div>
+                                      <span>{formatScore(getRepairScore(repair))} / 10</span>
+                                      <em>{repair.label}</em>
+                                    </>
+                                  ) : (
+                                    <span>No data</span>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
             )}
           </section>
         )}

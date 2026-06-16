@@ -65,6 +65,7 @@
 .hero-section,
 .results-section,
 .rankings-section,
+.compare-section,
 .how-section {
   width: min(1120px, calc(100% - 2rem));
   margin: 0 auto;
@@ -108,10 +109,13 @@
 
 .search-panel,
 .rankings-panel,
+.compare-panel,
 .status-panel,
 .result-card,
 .repairs-panel,
 .ranking-card,
+.compare-summary-card,
+.compare-repairs-panel,
 .info-grid article {
   border: 1px solid #dde5ec;
   border-radius: 8px;
@@ -130,7 +134,7 @@
 
 .view-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.45rem;
   border: 1px solid #d6e0e8;
   border-radius: 8px;
@@ -154,6 +158,7 @@
 }
 
 .rankings-panel,
+.compare-panel,
 .status-panel {
   padding: clamp(1.25rem, 3vw, 2rem);
 }
@@ -273,6 +278,10 @@ button:disabled {
 }
 
 .rankings-section {
+  padding: 0 0 1.5rem;
+}
+
+.compare-section {
   padding: 0 0 1.5rem;
 }
 
@@ -525,6 +534,202 @@ button:disabled {
 .ranking-card-score button {
   min-height: 2.65rem;
   margin-top: 0.25rem;
+}
+
+.compare-selector-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-top: 1.2rem;
+}
+
+.compare-selector-card {
+  display: grid;
+  gap: 0.85rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid #dde5ec;
+  border-radius: 8px;
+  padding: 1.1rem;
+  background: #ffffff;
+}
+
+.compare-selector-card select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compare-selector-heading {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.compare-selector-card h3 {
+  margin: 0;
+  color: #111b27;
+  font-size: 1rem;
+}
+
+.compare-selector-heading span {
+  color: #667789;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.compare-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.compare-actions button {
+  flex: 0 1 12rem;
+  width: auto;
+  min-width: 0;
+}
+
+.best-overall-card {
+  border: 1px solid #b9dfc6;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  padding: 1rem;
+  background: #dff5e6;
+  color: #1f6a3d;
+  font-weight: 900;
+}
+
+.compare-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.compare-summary-card {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1rem;
+}
+
+.compare-summary-card h3 {
+  margin: 0;
+  color: #111b27;
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+}
+
+.compare-summary-card p {
+  margin: 0;
+  color: #405064;
+  line-height: 1.55;
+}
+
+.compare-score-block {
+  display: grid;
+  gap: 0.25rem;
+  border-radius: 8px;
+  margin-top: 0.35rem;
+  padding: 0.85rem;
+  background: #182434;
+  color: #f8fafc;
+}
+
+.compare-score-block span,
+.compare-score-block em {
+  color: #d8e2ec;
+  font-size: 0.85rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.compare-score-block strong {
+  color: #f3b44b;
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.compare-repairs-panel {
+  margin-top: 1rem;
+  padding: clamp(1rem, 3vw, 1.5rem);
+}
+
+.compare-repair-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin: 1rem 0;
+}
+
+.compare-repair-table-wrap {
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.compare-repair-table {
+  display: grid;
+  min-width: 760px;
+  gap: 0.5rem;
+}
+
+.compare-repair-header,
+.compare-repair-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) repeat(3, minmax(160px, 0.8fr));
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.compare-repair-header span {
+  color: #667789;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.compare-repair-name,
+.compare-repair-cell {
+  border: 1px solid #edf2f6;
+  border-radius: 6px;
+  padding: 0.75rem;
+  background: #ffffff;
+}
+
+.compare-repair-name strong {
+  color: #111b27;
+}
+
+.compare-repair-cell {
+  display: grid;
+  gap: 0.25rem;
+  color: #405064;
+}
+
+.compare-repair-cell em {
+  color: #667789;
+  font-size: 0.85rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.compare-cell-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.best-badge {
+  display: inline-flex;
+  width: max-content;
+  border-radius: 999px;
+  padding: 0.16rem 0.5rem;
+  background: #dff5e6;
+  color: #1f6a3d;
+  font-size: 0.72rem;
+  font-weight: 900;
 }
 
 .status-panel-header {
@@ -801,6 +1006,8 @@ button:disabled {
   .repair-row,
   .repair-control-row,
   .ranking-card,
+  .compare-summary-grid,
+  .compare-repair-controls,
   .status-detail-grid,
   .info-grid {
     grid-template-columns: 1fr;
@@ -832,16 +1039,21 @@ button:disabled {
   .hero-section,
   .results-section,
   .rankings-section,
+  .compare-section,
   .how-section {
     width: min(100% - 1rem, 1120px);
   }
 
   .search-panel,
   .rankings-panel,
+  .compare-panel,
   .status-panel,
   .result-card,
   .repairs-panel,
   .ranking-card,
+  .compare-selector-card,
+  .compare-summary-card,
+  .compare-repairs-panel,
   .status-metric-card,
   .status-detail-card,
   .status-recommendation,
@@ -853,6 +1065,14 @@ button:disabled {
 
   .view-tabs {
     grid-template-columns: 1fr;
+  }
+
+  .compare-actions {
+    display: grid;
+  }
+
+  .compare-actions button {
+    width: 100%;
   }
 
   .filter-button-group {
