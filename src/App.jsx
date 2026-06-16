@@ -510,6 +510,14 @@ const formatRepairNameList = (names) => {
   return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
 }
 
+const formatHours = (hours) => {
+  const numericHours = Number(hours)
+
+  if (!Number.isFinite(numericHours)) return 'No data'
+
+  return `${numericHours.toFixed(1)} ${numericHours === 1 ? 'hr' : 'hrs'}`
+}
+
 const getScoreBasedSummary = (overallScore) => {
   const score = Number(overallScore)
 
@@ -842,6 +850,30 @@ const buildDataStatusSummary = ({
 const getCompareRepairKey = (repair) =>
   getRepairSlug(repair) || String(repair.repair_task_id ?? repair.repairTaskId ?? repair.id)
 
+const getRepairWinner = (row) => {
+  const validCells = [...row.cells.entries()]
+    .map(([vehicleId, repair]) => ({
+      vehicleId,
+      repair,
+      hours: getRepairHours(repair),
+    }))
+    .filter(({ hours }) => Number.isFinite(hours))
+
+  if (validCells.length === 0) return []
+
+  const bestHours = Math.min(...validCells.map(({ hours }) => hours))
+
+  return validCells.filter(({ hours }) => hours === bestHours)
+}
+
+const getLaborHourSpread = (row) => {
+  const hours = [...row.cells.values()].map(getRepairHours).filter(Number.isFinite)
+
+  if (hours.length < 2) return 0
+
+  return Math.max(...hours) - Math.min(...hours)
+}
+
 const getCompareRepairRows = (comparisonVehicles, viewMode, sortMode) => {
   const rowsByKey = new Map()
 
@@ -937,6 +969,96 @@ const getCompareRepairRows = (comparisonVehicles, viewMode, sortMode) => {
   }
 
   return filteredRows.sort(sortRows)
+}
+
+const getComparableRepairRows = (comparisonVehicles) =>
+  getCompareRepairRows(comparisonVehicles, 'shared', 'labor-spread')
+    .filter((row) => row.hoursCount >= 2)
+
+const buildCompareHighlights = (comparisonVehicles) => {
+  const highlights = []
+  const scoredVehicles = comparisonVehicles.filter(({ vehicleScore }) =>
+    Number.isFinite(Number(vehicleScore?.overall_score)),
+  )
+  const comparableRows = getComparableRepairRows(comparisonVehicles)
+
+  if (scoredVehicles.length > 0) {
+    const bestScore = Math.max(
+      ...scoredVehicles.map(({ vehicleScore }) => Number(vehicleScore.overall_score)),
+    )
+    const winners = scoredVehicles.filter(
+      ({ vehicleScore }) => Number(vehicleScore.overall_score) === bestScore,
+    )
+
+    if (winners.length === 1) {
+      const { vehicle } = winners[0]
+      highlights.push(
+        `Best overall: ${getVehicleTitle(vehicle)} ${getVehicleConfigurationLabel(vehicle)} has the highest Wrenchability Score at ${formatScore(bestScore)}/10.`,
+      )
+    } else {
+      highlights.push('Best overall: Tie.')
+    }
+
+    const sortedScores = scoredVehicles
+      .map(({ vehicleScore }) => Number(vehicleScore.overall_score))
+      .sort((first, second) => second - first)
+
+    if (sortedScores.length >= 2 && sortedScores[0] - sortedScores[sortedScores.length - 1] <= 0.5) {
+      highlights.push('These vehicles are closely matched overall, so the deciding factor may be specific repairs.')
+    }
+  }
+
+  const biggestDifference = comparableRows[0]
+
+  if (biggestDifference && getLaborHourSpread(biggestDifference) > 0) {
+    const validCells = [...biggestDifference.cells.entries()]
+      .map(([vehicleId, repair]) => ({
+        vehicle: comparisonVehicles.find((item) => String(item.vehicle.id) === vehicleId)?.vehicle,
+        hours: getRepairHours(repair),
+      }))
+      .filter(({ vehicle, hours }) => vehicle && Number.isFinite(hours))
+      .sort((first, second) => first.hours - second.hours)
+    const easiest = validCells[0]
+    const hardest = validCells[validCells.length - 1]
+
+    if (easiest && hardest) {
+      highlights.push(
+        `The biggest difference is ${biggestDifference.name}: ${getVehicleTitle(easiest.vehicle)} is estimated at ${formatHours(easiest.hours)}, while ${getVehicleTitle(hardest.vehicle)} is ${formatHours(hardest.hours)}.`,
+      )
+    }
+  }
+
+  const winCounts = new Map()
+
+  for (const row of comparableRows) {
+    const winners = getRepairWinner(row)
+
+    for (const winner of winners) {
+      incrementCount(winCounts, winner.vehicleId)
+    }
+  }
+
+  const topWinner = [...winCounts.entries()].sort((first, second) => second[1] - first[1])[0]
+
+  if (topWinner) {
+    const vehicle = comparisonVehicles.find((item) => String(item.vehicle.id) === topWinner[0])?.vehicle
+
+    if (vehicle) {
+      highlights.push(`${getVehicleTitle(vehicle)} wins the most shared repairs in this comparison.`)
+    }
+  }
+
+  const totalRepairSlots = comparisonVehicles.reduce(
+    (total, item) => total + (item.repairs?.length ?? 0),
+    0,
+  )
+  const possibleRepairSlots = comparableRows.length * comparisonVehicles.length
+
+  if (possibleRepairSlots > 0 && totalRepairSlots < possibleRepairSlots * 0.75) {
+    highlights.push('Some repairs do not have data for every selected vehicle, so compare shared repairs first.')
+  }
+
+  return highlights.slice(0, 6)
 }
 
 const getBestOverallText = (comparisonVehicles) => {
@@ -1745,6 +1867,19 @@ function App() {
       ),
     [comparisonVehicles, compareRepairSort, compareRepairView],
   )
+  const compareHighlights = useMemo(
+    () => buildCompareHighlights(comparisonVehicles),
+    [comparisonVehicles],
+  )
+  const compareRepairSummaryText = useMemo(() => {
+    const vehicleCount = comparisonVehicles.length
+
+    if (compareRepairView === 'top-ownership') {
+      return `Showing ${compareRepairRows.length} common ownership repairs.`
+    }
+
+    return `Comparing ${compareRepairRows.length} shared ${compareRepairRows.length === 1 ? 'repair' : 'repairs'} across ${vehicleCount} ${vehicleCount === 1 ? 'vehicle' : 'vehicles'}.`
+  }, [compareRepairRows.length, compareRepairView, comparisonVehicles.length])
   const bestOverallText = useMemo(
     () => getBestOverallText(comparisonVehicles),
     [comparisonVehicles],
@@ -2476,6 +2611,22 @@ function App() {
                   ))}
                 </div>
 
+                {compareHighlights.length > 0 && (
+                  <div className="compare-highlights">
+                    <div className="section-heading compact">
+                      <p className="eyebrow">What stands out</p>
+                      <h2>Comparison highlights</h2>
+                    </div>
+                    <div className="compare-highlight-grid">
+                      {compareHighlights.map((highlight) => (
+                        <article className="compare-highlight-card" key={highlight}>
+                          {highlight}
+                        </article>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="compare-repairs-panel">
                   <div className="section-heading compact">
                     <p className="eyebrow">Common repair comparison</p>
@@ -2512,6 +2663,8 @@ function App() {
                     </label>
                   </div>
 
+                  <p className="comparison-summary-text">{compareRepairSummaryText}</p>
+
                   {compareRepairRows.length === 0 ? (
                     <article className="empty-repairs">
                       No shared repair data found for these vehicles.
@@ -2541,6 +2694,12 @@ function App() {
                           >
                             <div className="compare-repair-name">
                               <strong>{row.name}</strong>
+                              {row.laborSpread >= 2 && (
+                                <span className="difference-badge">Big difference</span>
+                              )}
+                              {row.hoursCount >= 2 && row.laborSpread <= 0.3 && (
+                                <span className="close-badge">Close</span>
+                              )}
                             </div>
                             {comparisonVehicles.map(({ vehicle }) => {
                               const repair = row.cells.get(String(vehicle.id))
@@ -2556,7 +2715,7 @@ function App() {
                                   {repair ? (
                                     <>
                                       <div className="compare-cell-topline">
-                                        <strong>{Number(hours).toFixed(1)} hrs</strong>
+                                        <strong>{formatHours(hours)}</strong>
                                         {isBest && <span className="best-badge">Best</span>}
                                       </div>
                                       <span>{formatScore(getRepairScore(repair))} / 10</span>
