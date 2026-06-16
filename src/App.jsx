@@ -5,8 +5,26 @@ import './App.css'
 const BRAND = {
   name: 'Wrenchable Cars',
   tagline: 'Find cars that are easier to fix, maintain, and own.',
-  shortTagline: 'Rank cars by repairability.',
+  shortTagline: 'Compare common repair labor times.',
 }
+
+const FEATURE_CALLOUTS = [
+  {
+    title: 'Search by Vehicle',
+    description: 'Pick a year, make, model, and engine to see common repair ratings.',
+  },
+  {
+    title: 'Browse Rankings',
+    description: 'Find the easiest and hardest vehicles based on Wrenchability Score.',
+  },
+  {
+    title: 'Compare Vehicles',
+    description: 'Compare repair labor times side by side.',
+  },
+]
+
+const WRENCHABILITY_SCORE_EXPLANATION =
+  'Wrenchability Score is a 1-10 rating based on estimated labor time for common repairs. Higher scores generally mean simpler, more approachable maintenance and repair work.'
 
 const scoreClass = (score) => {
   const numericScore = Number(score)
@@ -1673,9 +1691,20 @@ function App() {
               {BRAND.tagline}
             </p>
             <p className="hero-support">
-              Compare vehicles by common repair labor times, maintenance difficulty,
-              and overall DIY-friendliness.
+              Search a specific vehicle, browse the easiest and hardest models,
+              or compare vehicles side by side before you buy.
             </p>
+
+            <div className="feature-callouts" aria-label="Ways to use Wrenchable Cars">
+              {FEATURE_CALLOUTS.map((feature) => (
+                <article key={feature.title}>
+                  <h2>{feature.title}</h2>
+                  <p>{feature.description}</p>
+                </article>
+              ))}
+            </div>
+
+            <p className="score-explainer">{WRENCHABILITY_SCORE_EXPLANATION}</p>
           </div>
 
           <div className="view-workspace" id="search">
