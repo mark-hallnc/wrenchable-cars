@@ -433,12 +433,34 @@ button:disabled {
   color: var(--color-danger);
 }
 
-.result-summary {
+.result-summary,
+.vehicle-profile-hero {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1.25rem;
   margin-bottom: 1.25rem;
+}
+
+.vehicle-profile-main {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.vehicle-profile-copy {
+  max-width: 720px;
+  margin-top: 0.55rem;
+}
+
+.vehicle-profile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin: -0.25rem 0 1rem;
+}
+
+.vehicle-profile-actions .secondary-button {
+  min-width: 9.5rem;
 }
 
 .meta-label,
@@ -480,10 +502,6 @@ button:disabled {
   color: #4f5965;
   font-size: 0.75rem;
   font-weight: 900;
-}
-
-.result-compare-button {
-  margin-top: 0.85rem;
 }
 
 .score-badge {
@@ -555,6 +573,65 @@ button:disabled {
   margin: 0;
   color: #4f5965;
   font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.quick-take-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.quick-take-card,
+.category-summary-card {
+  border: 1px solid #ece4d8;
+  border-radius: var(--radius-card);
+  padding: 0.9rem;
+  background: var(--color-surface-alt);
+}
+
+.quick-take-card {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.quick-take-card span,
+.category-summary-card span {
+  color: var(--color-muted);
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.quick-take-card strong,
+.category-summary-card strong {
+  color: var(--color-text);
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.category-summary {
+  margin-top: 1.2rem;
+}
+
+.category-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.category-summary-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.profile-disclaimer {
+  max-width: 860px;
+  margin: 1rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.9rem;
   line-height: 1.5;
 }
 
@@ -1224,6 +1301,7 @@ button:disabled {
   }
 
   .result-summary,
+  .vehicle-profile-hero,
   .score-line {
     align-items: stretch;
     flex-direction: column;
@@ -1235,6 +1313,8 @@ button:disabled {
 
   .repair-row,
   .repair-control-row,
+  .quick-take-grid,
+  .category-summary-grid,
   .ranking-card,
   .compare-summary-grid,
   .compare-highlight-grid,
@@ -1258,6 +1338,14 @@ button:disabled {
 
   .ranking-controls {
     grid-template-columns: 1fr;
+  }
+
+  .vehicle-profile-actions {
+    display: grid;
+  }
+
+  .vehicle-profile-actions .secondary-button {
+    width: 100%;
   }
 }
 
@@ -1333,5 +1421,9 @@ button:disabled {
 
   .label-pill {
     width: max-content;
+  }
+
+  .category-summary-card {
+    display: grid;
   }
 }

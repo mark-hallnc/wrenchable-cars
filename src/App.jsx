@@ -89,10 +89,10 @@ const TOP_OWNERSHIP_REPAIR_NAME_KEYWORDS = [
 ]
 
 const REPAIR_VIEW_FILTERS = [
-  { value: 'top-ownership', label: 'Top 20 Ownership Repairs' },
-  { value: 'easiest', label: 'Easiest Repairs' },
-  { value: 'hardest', label: 'Hardest Repairs' },
-  { value: 'all', label: 'All Repairs' },
+  { value: 'top-ownership', label: 'Top ownership repairs' },
+  { value: 'easiest', label: 'Easiest repairs' },
+  { value: 'hardest', label: 'Hardest repairs' },
+  { value: 'all', label: 'All repairs' },
 ]
 
 const REPAIR_SORT_MODES = [
@@ -596,6 +596,94 @@ const buildVehicleScoreSummary = (vehicle, repairScores) => {
   }
 
   return `This vehicle is a mixed bag.${easiestNames ? ` Basic work like ${easiestNames} looks approachable,` : ' Basic maintenance looks approachable,'}${hardestNames ? ` but ${hardestNames} take enough labor to pull the overall score down.` : ' but a few common repairs take enough labor to pull the overall score down.'}`
+}
+
+const getVehicleQuickTake = (repairs) => {
+  const repairRows = (repairs ?? [])
+    .map((repair) => ({
+      repair,
+      score: getRepairScore(repair),
+      hours: getRepairHours(repair),
+    }))
+    .filter(({ score, hours }) => Number.isFinite(score) || Number.isFinite(hours))
+  const scoredRepairs = repairRows.filter(({ score }) => Number.isFinite(score))
+  const hourRepairs = repairRows.filter(({ hours }) => Number.isFinite(hours))
+  const easiest = formatRepairNameList(
+    getUniqueRepairNames(
+      [...repairRows]
+        .sort(
+          (first, second) =>
+            compareFiniteNumbers(first.score, second.score, 'desc') ||
+            compareFiniteNumbers(first.hours, second.hours, 'asc'),
+        )
+        .map(({ repair }) => repair),
+      3,
+    ),
+  )
+  const hardest = formatRepairNameList(
+    getUniqueRepairNames(
+      [...repairRows]
+        .sort(
+          (first, second) =>
+            compareFiniteNumbers(first.score, second.score, 'asc') ||
+            compareFiniteNumbers(first.hours, second.hours, 'desc'),
+        )
+        .map(({ repair }) => repair),
+      2,
+    ),
+  )
+  const averageHours = hourRepairs.length
+    ? hourRepairs.reduce((total, item) => total + item.hours, 0) / hourRepairs.length
+    : null
+
+  return [
+    { label: 'Easiest', value: easiest || 'More data needed' },
+    { label: 'Watch out for', value: hardest || 'More data needed' },
+    {
+      label: 'Average shown repair',
+      value: averageHours === null ? 'More data needed' : formatHours(averageHours),
+    },
+    { label: 'Repairs scored', value: String(scoredRepairs.length) },
+  ]
+}
+
+const getCategoryLabelFromAverage = (averageScore) => {
+  if (averageScore >= 9) return 'Easy'
+  if (averageScore >= 7) return 'DIY Friendly'
+  if (averageScore >= 5) return 'Moderate'
+  if (averageScore >= 3) return 'Advanced'
+  return 'Major Job'
+}
+
+const getRepairCategorySummary = (repairs) => {
+  const categoryGroups = new Map()
+
+  for (const repair of repairs ?? []) {
+    const category = getRepairCategory(repair)
+    const score = getRepairScore(repair)
+
+    if (!category || !Number.isFinite(score)) continue
+
+    if (!categoryGroups.has(category)) {
+      categoryGroups.set(category, [])
+    }
+
+    categoryGroups.get(category).push(score)
+  }
+
+  return [...categoryGroups.entries()]
+    .filter(([, scores]) => scores.length >= 2)
+    .map(([category, scores]) => {
+      const averageScore = scores.reduce((total, score) => total + score, 0) / scores.length
+
+      return {
+        category,
+        label: getCategoryLabelFromAverage(averageScore),
+        score: averageScore,
+      }
+    })
+    .sort((first, second) => second.score - first.score)
+    .slice(0, 6)
 }
 
 const getJoinedVehicle = (scoreRow) => {
@@ -1836,6 +1924,14 @@ function App() {
       ),
     [result?.repairs, repairViewFilter, repairSortMode, repairSearchText],
   )
+  const vehicleQuickTake = useMemo(
+    () => getVehicleQuickTake(result?.repairs ?? []),
+    [result?.repairs],
+  )
+  const repairCategorySummary = useMemo(
+    () => getRepairCategorySummary(result?.repairs ?? []),
+    [result?.repairs],
+  )
   const repairSummaryText = useMemo(() => {
     const count = visibleRepairs.length
 
@@ -2764,22 +2860,15 @@ function App() {
                 </div>
 
                 <article className="result-card">
-                  <div className="result-summary">
-                    <div>
-                      <span className="meta-label">Vehicle</span>
+                  <div className="vehicle-profile-hero">
+                    <div className="vehicle-profile-main">
+                      <span className="meta-label">Vehicle profile</span>
                       <h3>{vehicleTitle}</h3>
                       <p className="configuration-text">{vehicleConfigurationLabel}</p>
                       <span className="configuration-badge">{vehicleConfigurationBadge}</span>
-                      <button
-                        className="secondary-button result-compare-button"
-                        type="button"
-                        onClick={() => addVehicleToCompare(result.vehicle)}
-                        disabled={selectedCompareIds.includes(String(result.vehicle.id))}
-                      >
-                        {selectedCompareIds.includes(String(result.vehicle.id))
-                          ? 'Added'
-                          : 'Add to compare'}
-                      </button>
+                      <p className="vehicle-profile-copy">
+                        {getVehicleVerdict(result.vehicleScore)}
+                      </p>
                     </div>
                     <div className="score-badge">
                       <span>Overall Wrenchability Score</span>
@@ -2793,17 +2882,70 @@ function App() {
                       )}
                     </div>
                   </div>
+
+                  <div className="vehicle-profile-actions">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => addVehicleToCompare(result.vehicle)}
+                      disabled={selectedCompareIds.includes(String(result.vehicle.id))}
+                    >
+                      {selectedCompareIds.includes(String(result.vehicle.id))
+                        ? 'Added'
+                        : 'Add to compare'}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setActiveView('rankings')}
+                    >
+                      Browse rankings
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => setActiveView('compare')}
+                    >
+                      Compare vehicles
+                    </button>
+                  </div>
+
                   <div className="score-explanation-card">
                     <h4>Why this score?</h4>
                     <p>{buildVehicleScoreSummary(result.vehicle, result.repairs)}</p>
                   </div>
-                  <p>{getVehicleVerdict(result.vehicleScore)}</p>
+
+                  <div className="quick-take-grid">
+                    {vehicleQuickTake.map((item) => (
+                      <article className="quick-take-card" key={item.label}>
+                        <span>{item.label}</span>
+                        <strong>{item.value}</strong>
+                      </article>
+                    ))}
+                  </div>
+
+                  {repairCategorySummary.length > 0 && (
+                    <div className="category-summary">
+                      <div className="section-heading compact">
+                        <p className="eyebrow">Repair category snapshot</p>
+                        <h2>Where this vehicle looks easier</h2>
+                      </div>
+                      <div className="category-summary-grid">
+                        {repairCategorySummary.map((item) => (
+                          <article className="category-summary-card" key={item.category}>
+                            <span>{item.category}</span>
+                            <strong>{item.label}</strong>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </article>
 
                 <div className="repairs-panel">
                   <div className="section-heading compact">
-                    <p className="eyebrow">Top common ownership repairs</p>
-                    <h2>Repair difficulty snapshot</h2>
+                    <p className="eyebrow">Repair details</p>
+                    <h2>Common repair ratings</h2>
                   </div>
 
                   <div className="repair-controls" aria-label="Repair list controls">
@@ -2884,6 +3026,10 @@ function App() {
                     ))}
                   </div>
                 </div>
+                <p className="profile-disclaimer">
+                  Scores are estimates based on common repair labor times. Actual
+                  difficulty can vary by rust, condition, tools, and experience.
+                </p>
               </>
             )}
           </section>
