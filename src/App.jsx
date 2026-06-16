@@ -1679,6 +1679,13 @@ function App() {
         <nav className="main-nav" aria-label="Primary navigation">
           <a href="#search">Search</a>
           <a href="#how-it-works">How it works</a>
+          <button
+            className={`status-link ${activeView === 'status' ? 'active' : ''}`}
+            type="button"
+            onClick={() => setActiveView('status')}
+          >
+            Status
+          </button>
         </nav>
       </header>
 
@@ -1729,13 +1736,6 @@ function App() {
                 onClick={() => setActiveView('compare')}
               >
                 Compare Vehicles
-              </button>
-              <button
-                className={activeView === 'status' ? 'active' : ''}
-                type="button"
-                onClick={() => setActiveView('status')}
-              >
-                Data Status
               </button>
             </div>
 
