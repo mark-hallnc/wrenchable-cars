@@ -481,6 +481,115 @@ const getVehicleVerdict = (vehicleScore) => {
   return verdict
 }
 
+const getUniqueRepairNames = (repairs, limit) => {
+  const names = []
+  const seenNames = new Set()
+
+  for (const repair of repairs) {
+    const name = getRepairName(repair)
+      .replace(/\s+replacement$/i, '')
+      .replace(/\s+service$/i, '')
+      .trim()
+
+    if (!name || seenNames.has(name.toLowerCase())) continue
+
+    seenNames.add(name.toLowerCase())
+    names.push(name)
+
+    if (names.length >= limit) break
+  }
+
+  return names
+}
+
+const formatRepairNameList = (names) => {
+  if (names.length === 0) return ''
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} and ${names[1]}`
+
+  return `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`
+}
+
+const getScoreBasedSummary = (overallScore) => {
+  const score = Number(overallScore)
+
+  if (!Number.isFinite(score)) {
+    return 'More repair data is needed to explain this score.'
+  }
+
+  if (score >= 8) {
+    return 'One of the easier vehicles in the current results.'
+  }
+
+  if (score >= 6.5) {
+    return 'Generally approachable for common maintenance and repair work.'
+  }
+
+  if (score >= 5) {
+    return 'A balanced option with some easy jobs and some harder ones.'
+  }
+
+  return 'Likely more demanding for DIY repair and maintenance.'
+}
+
+const buildVehicleScoreSummary = (vehicle, repairScores) => {
+  const usableRepairs = (repairScores ?? [])
+    .map((repair) => ({
+      repair,
+      score: getRepairScore(repair),
+      hours: getRepairHours(repair),
+    }))
+    .filter(({ score, hours }) => Number.isFinite(score) || Number.isFinite(hours))
+
+  if (usableRepairs.length === 0) {
+    return 'More repair data is needed to explain this score.'
+  }
+
+  const scoredRepairs = usableRepairs.filter(({ score }) => Number.isFinite(score))
+  const hourRepairs = usableRepairs.filter(({ hours }) => Number.isFinite(hours))
+  const averageScore = scoredRepairs.length
+    ? scoredRepairs.reduce((total, item) => total + item.score, 0) / scoredRepairs.length
+    : null
+  const easiestNames = formatRepairNameList(
+    getUniqueRepairNames(
+      [...usableRepairs].sort(
+        (first, second) =>
+          compareFiniteNumbers(first.score, second.score, 'desc') ||
+          compareFiniteNumbers(first.hours, second.hours, 'asc'),
+      ).map(({ repair }) => repair),
+      3,
+    ),
+  )
+  const hardestNames = formatRepairNameList(
+    getUniqueRepairNames(
+      [...usableRepairs].sort(
+        (first, second) =>
+          compareFiniteNumbers(first.score, second.score, 'asc') ||
+          compareFiniteNumbers(first.hours, second.hours, 'desc'),
+      ).map(({ repair }) => repair),
+      2,
+    ),
+  )
+  const longestNames = formatRepairNameList(
+    getUniqueRepairNames(
+      [...hourRepairs]
+        .sort((first, second) => compareFiniteNumbers(first.hours, second.hours, 'desc'))
+        .map(({ repair }) => repair),
+      2,
+    ),
+  )
+
+  if (averageScore !== null && averageScore >= 7.5) {
+    return `This vehicle scores well because several common jobs${easiestNames ? `, like ${easiestNames},` : ''} look quick and approachable.${hardestNames ? ` The main jobs to watch are ${hardestNames}.` : ''}`
+  }
+
+  if (averageScore !== null && averageScore < 5) {
+    return `This vehicle may be more demanding to maintain.${longestNames ? ` Repairs like ${longestNames} show higher labor times,` : ' Several common repairs have higher labor times,'} so it may be less friendly for driveway DIY work.`
+  }
+
+  return `This vehicle is a mixed bag.${easiestNames ? ` Basic work like ${easiestNames} looks approachable,` : ' Basic maintenance looks approachable,'}${hardestNames ? ` but ${hardestNames} take enough labor to pull the overall score down.` : ' but a few common repairs take enough labor to pull the overall score down.'}`
+}
+
 const getJoinedVehicle = (scoreRow) => {
   if (Array.isArray(scoreRow?.vehicles)) {
     return scoreRow.vehicles[0] ?? null
@@ -2271,6 +2380,9 @@ function App() {
                         {getConfigurationBadgeLabel(vehicle)}
                       </span>
                       {vehicle.vehicleScore && <p>{getVehicleVerdict(vehicle.vehicleScore)}</p>}
+                      <p className="score-summary-line">
+                        {getScoreBasedSummary(vehicle.vehicleScore?.overall_score)}
+                      </p>
                     </div>
                     <div className="ranking-card-score">
                       <span>Overall score</span>
@@ -2336,7 +2448,7 @@ function App() {
                 )}
 
                 <div className="compare-summary-grid">
-                  {comparisonVehicles.map(({ vehicle, vehicleScore }) => (
+                  {comparisonVehicles.map(({ vehicle, vehicleScore, repairs }) => (
                     <article className="compare-summary-card" key={vehicle.id}>
                       <span className="meta-label">Vehicle</span>
                       <h3>{getVehicleTitle(vehicle)}</h3>
@@ -2356,6 +2468,10 @@ function App() {
                         {vehicleScore?.score_label && <em>{vehicleScore.score_label}</em>}
                       </div>
                       {vehicleScore && <p>{getVehicleVerdict(vehicleScore)}</p>}
+                      <div className="score-explanation-card compact">
+                        <h4>Why it stands out</h4>
+                        <p>{buildVehicleScoreSummary(vehicle, repairs)}</p>
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -2518,9 +2634,11 @@ function App() {
                       )}
                     </div>
                   </div>
-                  <p>
-                    {getVehicleVerdict(result.vehicleScore)}
-                  </p>
+                  <div className="score-explanation-card">
+                    <h4>Why this score?</h4>
+                    <p>{buildVehicleScoreSummary(result.vehicle, result.repairs)}</p>
+                  </div>
+                  <p>{getVehicleVerdict(result.vehicleScore)}</p>
                 </article>
 
                 <div className="repairs-panel">
