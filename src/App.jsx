@@ -3282,32 +3282,91 @@ function App() {
 
         <section className="how-section" id="how-it-works">
           <div className="section-heading">
-            <p className="eyebrow">Practical scoring for shoppers</p>
-            <h2>How the Wrenchability Score works</h2>
+            <p className="eyebrow">Practical research before you buy</p>
+            <h2>How it works</h2>
           </div>
 
           <div className="info-grid">
             <article>
-              <h3>Labor hours</h3>
-              <p>Book labor time gives us a baseline for how involved a repair is.</p>
+              <h3>Choose a vehicle</h3>
+              <p>Pick a year, make, model, and engine.</p>
             </article>
             <article>
-              <h3>Repair comparison</h3>
+              <h3>Review common repair ratings</h3>
               <p>
-                Each job is compared against the same job on other vehicles, not
-                judged by one fixed rule.
+                Wrenchable Cars turns common repair labor times into an easy
+                1-10 Wrenchability Score.
               </p>
             </article>
             <article>
-              <h3>Buyer-friendly score</h3>
+              <h3>Compare before you buy</h3>
+              <p>Use rankings and side-by-side comparisons to spot easier choices.</p>
+            </article>
+          </div>
+
+          <div className="public-info-section">
+            <article className="score-meaning-card">
+              <p className="eyebrow">What the score means</p>
+              <h2>Higher scores usually mean simpler repairs.</h2>
               <p>
-                We turn the data into a simple 1-10 rating so used-car shoppers
-                can understand the pain before they buy.
+                Scores are based on estimated labor time for common repairs. Higher
+                scores usually mean simpler, more approachable maintenance and repair
+                work. Actual difficulty can vary by rust, condition, tools, and experience.
               </p>
             </article>
           </div>
+
+          <div className="faq-section" aria-label="Frequently asked questions">
+            <div className="section-heading compact">
+              <p className="eyebrow">FAQ</p>
+              <h2>Common questions</h2>
+            </div>
+            <div className="faq-grid">
+              <article>
+                <h3>What is a Wrenchability Score?</h3>
+                <p>
+                  A 1-10 rating that estimates how approachable a vehicle is for
+                  common maintenance and repair jobs. Higher is generally easier.
+                </p>
+              </article>
+              <article>
+                <h3>Is this a replacement for a mechanic's inspection?</h3>
+                <p>
+                  No. It is a research tool. Always inspect a specific vehicle's
+                  condition before buying.
+                </p>
+              </article>
+              <article>
+                <h3>Why does engine choice matter?</h3>
+                <p>
+                  Labor time can change by engine and configuration, so engine-specific
+                  results are more useful when available.
+                </p>
+              </article>
+              <article>
+                <h3>Why are some vehicles missing data?</h3>
+                <p>
+                  Some vehicles or repairs may not have enough labor-time data yet.
+                  Coverage improves as more vehicles are added.
+                </p>
+              </article>
+            </div>
+          </div>
         </section>
       </main>
+      <footer className="site-footer">
+        <div>
+          <strong>{BRAND.name}</strong>
+          <p>Repair difficulty estimates are for research only.</p>
+        </div>
+        <button
+          className="status-link"
+          type="button"
+          onClick={() => setActiveView('status')}
+        >
+          Status
+        </button>
+      </footer>
     </div>
   )
 }
