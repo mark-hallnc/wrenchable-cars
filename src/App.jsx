@@ -388,6 +388,16 @@ const selectAllRows = async (tableName, selectColumns) => {
   return rows
 }
 
+const countRows = async (tableName) => {
+  const { count, error } = await supabase
+    .from(tableName)
+    .select('id', { count: 'exact', head: true })
+
+  if (error) throw error
+
+  return count ?? 0
+}
+
 const getRecommendedRepairSort = (viewFilter) => {
   if (viewFilter === 'top-ownership') {
     return (first, second) =>
@@ -813,19 +823,6 @@ const getCoverageInfoFromRepairCount = (repairCount) => {
   return { coverageLabel: 'Early estimate', scoredRepairCount: count }
 }
 
-const addRepairCountsToRankedVehicles = (rankedVehicles, repairScoreRows) => {
-  const countsByVehicleId = new Map()
-
-  for (const row of repairScoreRows ?? []) {
-    incrementCount(countsByVehicleId, String(row.vehicle_id))
-  }
-
-  return rankedVehicles.map((vehicle) => ({
-    ...vehicle,
-    repairCount: countsByVehicleId.get(String(vehicle.id)) ?? 0,
-  }))
-}
-
 const getJoinedVehicle = (scoreRow) => {
   if (Array.isArray(scoreRow?.vehicles)) {
     return scoreRow.vehicles[0] ?? null
@@ -1000,10 +997,11 @@ const getEngineOptions = (vehicles, year, make, model) => {
 const buildDataStatusSummary = ({
   vehicles,
   vehicleScores,
-  repairScores,
-  laborEstimates,
-  repairTasks,
+  repairScoreCount,
+  laborEstimateCount,
+  repairTaskCount,
   queueRows,
+  queueTotal,
   queueAvailable,
 }) => {
   const vehicleScoresByVehicleId = new Set(
@@ -1061,10 +1059,10 @@ const buildDataStatusSummary = ({
       engineSpecificVehicles: engineSpecificVehicles.length,
       genericVehicles: genericVehicles.length,
       vehicleScores: vehicleScores.length,
-      repairScores: repairScores.length,
-      laborEstimates: laborEstimates.length,
-      repairTasks: repairTasks.length,
-      queueTotal: queueAvailable ? queueRows.length : null,
+      repairScores: repairScoreCount,
+      laborEstimates: laborEstimateCount,
+      repairTasks: repairTaskCount,
+      queueTotal: queueAvailable ? queueTotal : null,
     },
     queueAvailable,
     queueStatusCounts,
@@ -1447,41 +1445,17 @@ function App() {
           if (vehiclesResponse.error) throw vehiclesResponse.error
 
           const ranked = mergeVehicleScoreRows(scoresResponse.data, vehiclesResponse.data)
-          const repairCountResponse = await supabase
-            .from('repair_scores')
-            .select('id, vehicle_id')
-          const rankedWithCounts = repairCountResponse.error
-            ? ranked
-            : addRepairCountsToRankedVehicles(ranked, repairCountResponse.data)
-
-          if (repairCountResponse.error) {
-            console.warn('Repair score counts unavailable:', repairCountResponse.error)
-          }
-
-          console.log('vehicle_scores rows:', scoresResponse.data?.length || 0)
-          console.log('ranked vehicles:', rankedWithCounts.length)
-
-          setRankedVehicles(rankedWithCounts)
+          // Do not load all repair_scores here; the table can be large.
+          // Rankings use vehicle_scores as the source of truth and omit repair counts.
+          setRankedVehicles(ranked)
           setRankingsStatus('loaded')
           return
         }
 
         const ranked = mapVehicleScoreRows(data)
-        const repairCountResponse = await supabase
-          .from('repair_scores')
-          .select('id, vehicle_id')
-        const rankedWithCounts = repairCountResponse.error
-          ? ranked
-          : addRepairCountsToRankedVehicles(ranked, repairCountResponse.data)
-
-        if (repairCountResponse.error) {
-          console.warn('Repair score counts unavailable:', repairCountResponse.error)
-        }
-
-        console.log('vehicle_scores rows:', data?.length || 0)
-        console.log('ranked vehicles:', rankedWithCounts.length)
-
-        setRankedVehicles(rankedWithCounts)
+        // Do not load all repair_scores here; the table can be large.
+        // Rankings use vehicle_scores as the source of truth and omit repair counts.
+        setRankedVehicles(ranked)
         setRankingsStatus('loaded')
       } catch (error) {
         console.error('Error loading vehicle rankings:', error)
@@ -1504,22 +1478,30 @@ function App() {
       const [
         vehiclesRows,
         vehicleScoreRows,
-        repairScoreRows,
-        laborEstimateRows,
-        repairTaskRows,
+        repairScoreCount,
+        laborEstimateCount,
+        repairTaskCount,
       ] = await Promise.all([
         selectAllRows('vehicles', 'id, year, make, model, trim, engine, source_engine_slug'),
         selectAllRows('vehicle_scores', 'id, vehicle_id'),
-        selectAllRows('repair_scores', 'id, vehicle_id'),
-        selectAllRows('labor_estimates', 'id'),
-        selectAllRows('repair_tasks', 'id'),
+        // Do not load all repair_scores here; table can be large.
+        countRows('repair_scores'),
+        // Do not load all labor_estimates here; table can be large.
+        countRows('labor_estimates'),
+        countRows('repair_tasks'),
       ])
 
       let queueRows = []
+      let queueTotal = null
       let queueAvailable = true
 
       try {
-        queueRows = await selectAllRows('openlabor_import_queue', 'id, status')
+        const [queueStatusRows, queueCount] = await Promise.all([
+          selectAllRows('openlabor_import_queue', 'id, status'),
+          countRows('openlabor_import_queue'),
+        ])
+        queueRows = queueStatusRows
+        queueTotal = queueCount
       } catch (queueError) {
         console.warn('Queue status unavailable to the frontend:', queueError)
         queueAvailable = false
@@ -1529,10 +1511,11 @@ function App() {
         buildDataStatusSummary({
           vehicles: vehiclesRows,
           vehicleScores: vehicleScoreRows,
-          repairScores: repairScoreRows,
-          laborEstimates: laborEstimateRows,
-          repairTasks: repairTaskRows,
+          repairScoreCount,
+          laborEstimateCount,
+          repairTaskCount,
           queueRows,
+          queueTotal,
           queueAvailable,
         }),
       )
@@ -1672,10 +1655,11 @@ function App() {
           .select('id, overall_score, score_label, verdict, calculated_at')
           .eq('vehicle_id', vehicle.id)
           .maybeSingle(),
+        // Do not load all repair_scores here; fetch only the selected vehicle.
         supabase
           .from('repair_scores')
           .select(
-            'id, repair_task_id, labor_hours, wrenchability_score, score_label',
+            'id, vehicle_id, repair_task_id, labor_hours, wrenchability_score, score_label',
           )
           .eq('vehicle_id', vehicle.id),
       ])
@@ -2054,7 +2038,7 @@ function App() {
   const loadComparison = async () => {
     const selectedIds = [
       ...new Set(compareSlots.map((slot) => slot.vehicleId).filter(Boolean)),
-    ]
+    ].slice(0, 3)
 
     if (selectedIds.length < 2) return
 
@@ -2075,6 +2059,7 @@ function App() {
           .from('vehicle_scores')
           .select('id, vehicle_id, overall_score, score_label, verdict')
           .in('vehicle_id', selectedIds),
+        // Do not load all repair_scores here; compare is limited to up to 3 selected vehicles.
         supabase
           .from('repair_scores')
           .select('id, vehicle_id, repair_task_id, labor_hours, wrenchability_score, score_label')
@@ -2801,7 +2786,8 @@ function App() {
 
                 {dataStatusState === 'error' && (
                   <article className="status-card error">
-                    Something went wrong loading data status.
+                    Something went wrong loading data status. For the full local report,
+                    run npm.cmd run data:status.
                   </article>
                 )}
 
