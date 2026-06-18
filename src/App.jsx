@@ -3410,8 +3410,17 @@ function App() {
                   </div>
                 </div>
                 <p className="profile-disclaimer">
-                  Scores are estimates based on common repair labor times. Actual
-                  difficulty can vary by rust, condition, tools, and experience.
+                  Scores are estimates based on common repair labor times. Labor-time
+                  data provided by{' '}
+                  <a
+                    href="https://openlaborproject.com"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open Labor Project
+                  </a>
+                  . Actual difficulty can vary by rust, condition, tools, and
+                  experience.
                 </p>
               </>
             )}
@@ -3495,7 +3504,17 @@ function App() {
       <footer className="site-footer">
         <div>
           <strong>{BRAND.name}</strong>
-          <p>Repair difficulty estimates are for research only.</p>
+          <p>
+            Labor-time data provided by{' '}
+            <a
+              href="https://openlaborproject.com"
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open Labor Project
+            </a>
+            . Scores and ratings are calculated by {BRAND.name}.
+          </p>
         </div>
         <button
           className="status-link"
