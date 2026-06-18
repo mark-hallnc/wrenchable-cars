@@ -616,6 +616,11 @@ const buildVehicleScoreSummary = (vehicle, repairScores) => {
     return 'More repair data is needed to explain this score.'
   }
 
+  const coverageInfo = getVehicleCoverageInfo(repairScores)
+  const coverageNote = ['Limited coverage', 'Early estimate'].includes(coverageInfo.coverageLabel)
+    ? ' Coverage is still growing for this configuration.'
+    : ''
+
   const scoredRepairs = usableRepairs.filter(({ score }) => Number.isFinite(score))
   const hourRepairs = usableRepairs.filter(({ hours }) => Number.isFinite(hours))
   const averageScore = scoredRepairs.length
@@ -651,14 +656,14 @@ const buildVehicleScoreSummary = (vehicle, repairScores) => {
   )
 
   if (averageScore !== null && averageScore >= 7.5) {
-    return `This vehicle scores well because several common jobs${easiestNames ? `, like ${easiestNames},` : ''} look quick and approachable.${hardestNames ? ` The main jobs to watch are ${hardestNames}.` : ''}`
+    return `This vehicle scores well because several common jobs${easiestNames ? `, like ${easiestNames},` : ''} look quick and approachable.${hardestNames ? ` The main jobs to watch are ${hardestNames}.` : ''}${coverageNote}`
   }
 
   if (averageScore !== null && averageScore < 5) {
-    return `This vehicle may be more demanding to maintain.${longestNames ? ` Repairs like ${longestNames} show higher labor times,` : ' Several common repairs have higher labor times,'} so it may be less friendly for driveway DIY work.`
+    return `This vehicle may be more demanding to maintain.${longestNames ? ` Repairs like ${longestNames} show higher labor times,` : ' Several common repairs have higher labor times,'} so it may be less friendly for driveway DIY work.${coverageNote}`
   }
 
-  return `This vehicle is a mixed bag.${easiestNames ? ` Basic work like ${easiestNames} looks approachable,` : ' Basic maintenance looks approachable,'}${hardestNames ? ` but ${hardestNames} take enough labor to pull the overall score down.` : ' but a few common repairs take enough labor to pull the overall score down.'}`
+  return `This vehicle is a mixed bag.${easiestNames ? ` Basic work like ${easiestNames} looks approachable,` : ' Basic maintenance looks approachable,'}${hardestNames ? ` but ${hardestNames} take enough labor to pull the overall score down.` : ' but a few common repairs take enough labor to pull the overall score down.'}${coverageNote}`
 }
 
 const getVehicleQuickTake = (repairs) => {
@@ -747,6 +752,78 @@ const getRepairCategorySummary = (repairs) => {
     })
     .sort((first, second) => second.score - first.score)
     .slice(0, 6)
+}
+
+const getCoverageLabelClass = (coverageLabel) =>
+  normalizeText(coverageLabel).replace(/\s+/g, '-')
+
+const getVehicleCoverageInfo = (repairScores) => {
+  const repairs = repairScores ?? []
+  const scoredRepairCount = repairs.filter((repair) =>
+    Number.isFinite(getRepairScore(repair)),
+  ).length
+  const topOwnershipRepairCount = repairs.filter((repair) =>
+    Number.isFinite(getRepairScore(repair)) && isTopOwnershipRepair(repair),
+  ).length
+
+  if (topOwnershipRepairCount >= 16) {
+    return {
+      scoredRepairCount,
+      topOwnershipRepairCount,
+      coverageLabel: 'Strong coverage',
+      coverageDescription: 'This score is backed by many common repair ratings.',
+    }
+  }
+
+  if (topOwnershipRepairCount >= 10) {
+    return {
+      scoredRepairCount,
+      topOwnershipRepairCount,
+      coverageLabel: 'Good coverage',
+      coverageDescription: 'This score is backed by several common repair ratings.',
+    }
+  }
+
+  if (topOwnershipRepairCount >= 5) {
+    return {
+      scoredRepairCount,
+      topOwnershipRepairCount,
+      coverageLabel: 'Limited coverage',
+      coverageDescription: 'This score is based on a smaller set of repair ratings.',
+    }
+  }
+
+  return {
+    scoredRepairCount,
+    topOwnershipRepairCount,
+    coverageLabel: 'Early estimate',
+    coverageDescription: 'More repair ratings are needed for a stronger score.',
+  }
+}
+
+const getCoverageInfoFromRepairCount = (repairCount) => {
+  const count = Number(repairCount)
+
+  if (!Number.isFinite(count) || count <= 0) return null
+
+  if (count >= 16) return { coverageLabel: 'Strong coverage', scoredRepairCount: count }
+  if (count >= 10) return { coverageLabel: 'Good coverage', scoredRepairCount: count }
+  if (count >= 5) return { coverageLabel: 'Limited coverage', scoredRepairCount: count }
+
+  return { coverageLabel: 'Early estimate', scoredRepairCount: count }
+}
+
+const addRepairCountsToRankedVehicles = (rankedVehicles, repairScoreRows) => {
+  const countsByVehicleId = new Map()
+
+  for (const row of repairScoreRows ?? []) {
+    incrementCount(countsByVehicleId, String(row.vehicle_id))
+  }
+
+  return rankedVehicles.map((vehicle) => ({
+    ...vehicle,
+    repairCount: countsByVehicleId.get(String(vehicle.id)) ?? 0,
+  }))
 }
 
 const getJoinedVehicle = (scoreRow) => {
@@ -1370,21 +1447,41 @@ function App() {
           if (vehiclesResponse.error) throw vehiclesResponse.error
 
           const ranked = mergeVehicleScoreRows(scoresResponse.data, vehiclesResponse.data)
+          const repairCountResponse = await supabase
+            .from('repair_scores')
+            .select('id, vehicle_id')
+          const rankedWithCounts = repairCountResponse.error
+            ? ranked
+            : addRepairCountsToRankedVehicles(ranked, repairCountResponse.data)
+
+          if (repairCountResponse.error) {
+            console.warn('Repair score counts unavailable:', repairCountResponse.error)
+          }
 
           console.log('vehicle_scores rows:', scoresResponse.data?.length || 0)
-          console.log('ranked vehicles:', ranked.length)
+          console.log('ranked vehicles:', rankedWithCounts.length)
 
-          setRankedVehicles(ranked)
+          setRankedVehicles(rankedWithCounts)
           setRankingsStatus('loaded')
           return
         }
 
         const ranked = mapVehicleScoreRows(data)
+        const repairCountResponse = await supabase
+          .from('repair_scores')
+          .select('id, vehicle_id')
+        const rankedWithCounts = repairCountResponse.error
+          ? ranked
+          : addRepairCountsToRankedVehicles(ranked, repairCountResponse.data)
+
+        if (repairCountResponse.error) {
+          console.warn('Repair score counts unavailable:', repairCountResponse.error)
+        }
 
         console.log('vehicle_scores rows:', data?.length || 0)
-        console.log('ranked vehicles:', ranked.length)
+        console.log('ranked vehicles:', rankedWithCounts.length)
 
-        setRankedVehicles(ranked)
+        setRankedVehicles(rankedWithCounts)
         setRankingsStatus('loaded')
       } catch (error) {
         console.error('Error loading vehicle rankings:', error)
@@ -2124,6 +2221,10 @@ function App() {
     () => getVehicleQuickTake(result?.repairs ?? []),
     [result?.repairs],
   )
+  const vehicleCoverageInfo = useMemo(
+    () => getVehicleCoverageInfo(result?.repairs ?? []),
+    [result?.repairs],
+  )
   const repairCategorySummary = useMemo(
     () => getRepairCategorySummary(result?.repairs ?? []),
     [result?.repairs],
@@ -2853,7 +2954,18 @@ function App() {
                         <em>{vehicle.vehicleScore.score_label}</em>
                       )}
                       {vehicle.repairCount > 0 && (
-                        <span>{vehicle.repairCount} repair scores</span>
+                        <>
+                          {getCoverageInfoFromRepairCount(vehicle.repairCount) && (
+                            <span
+                              className={`coverage-badge ${getCoverageLabelClass(
+                                getCoverageInfoFromRepairCount(vehicle.repairCount).coverageLabel,
+                              )}`}
+                            >
+                              {getCoverageInfoFromRepairCount(vehicle.repairCount).coverageLabel}
+                            </span>
+                          )}
+                          <span>{vehicle.repairCount} repair scores</span>
+                        </>
                       )}
                       <button type="button" onClick={() => handleRankingDetailsClick(vehicle)}>
                         View repair details
@@ -2925,6 +3037,22 @@ function App() {
                         </strong>
                         {vehicleScore?.score_label && <em>{vehicleScore.score_label}</em>}
                       </div>
+                      {(() => {
+                        const coverageInfo = getVehicleCoverageInfo(repairs)
+
+                        return (
+                          <div className="coverage-line">
+                            <span
+                              className={`coverage-badge ${getCoverageLabelClass(
+                                coverageInfo.coverageLabel,
+                              )}`}
+                            >
+                              {coverageInfo.coverageLabel}
+                            </span>
+                            <span>{coverageInfo.coverageDescription}</span>
+                          </div>
+                        )
+                      })()}
                       {vehicleScore && <p>{getVehicleVerdict(vehicleScore)}</p>}
                       <div className="score-explanation-card compact">
                         <h4>Why it stands out</h4>
@@ -3107,6 +3235,16 @@ function App() {
                       {result.vehicleScore?.score_label && (
                         <em>{result.vehicleScore.score_label}</em>
                       )}
+                      <span
+                        className={`coverage-badge ${getCoverageLabelClass(
+                          vehicleCoverageInfo.coverageLabel,
+                        )}`}
+                      >
+                        {vehicleCoverageInfo.coverageLabel}
+                      </span>
+                      <span className="coverage-text">
+                        Based on {vehicleCoverageInfo.topOwnershipRepairCount || vehicleCoverageInfo.scoredRepairCount} common repair ratings.
+                      </span>
                     </div>
                   </div>
 
