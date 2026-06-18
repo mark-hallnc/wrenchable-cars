@@ -46,18 +46,33 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-export async function runOpenLaborQueue(options = {}) {
-  const limit = normalizeLimit(options.limit ?? parseLimit(), 5);
-  const log = options.log ?? true;
-  const { data: pendingRows, error } = await supabase
+async function fetchPendingQueueRows(limit) {
+  const baseColumns = 'id, year, make, model, make_slug, model_slug, engine, engine_slug, priority, created_at';
+  const query = (columns) => supabase
     .from('openlabor_import_queue')
-    .select(
-      'id, year, make, model, make_slug, model_slug, engine, engine_slug, priority, created_at',
-    )
+    .select(columns)
     .eq('status', 'pending')
     .order('priority', { ascending: false })
     .order('created_at', { ascending: true })
     .limit(limit);
+
+  const response = await query(`${baseColumns}, fuel_type`);
+
+  if (!response.error) {
+    return response;
+  }
+
+  if (String(response.error.message ?? '').includes('fuel_type')) {
+    return query(baseColumns);
+  }
+
+  return response;
+}
+
+export async function runOpenLaborQueue(options = {}) {
+  const limit = normalizeLimit(options.limit ?? parseLimit(), 5);
+  const log = options.log ?? true;
+  const { data: pendingRows, error } = await fetchPendingQueueRows(limit);
 
   if (error) {
     throw error;
@@ -87,6 +102,7 @@ export async function runOpenLaborQueue(options = {}) {
         modelSlug: row.model_slug,
         engine: row.engine,
         engineSlug: row.engine_slug,
+        fuelType: row.fuel_type,
         queueId: row.id,
       });
 

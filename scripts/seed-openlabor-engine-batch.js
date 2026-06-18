@@ -28,30 +28,43 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
   },
 });
 
-const targetYears = [2015, 2017, 2019];
-const requestDelayMs = 500;
+const DEFAULT_START_YEAR = 2010;
+const DEFAULT_END_YEAR = 2022;
+const DEFAULT_DELAY_MS = 750;
 
 const targetModels = [
-  { make: 'Ford', model: 'F-150', category: 'truck' },
-  { make: 'Chevrolet', model: 'Silverado 1500', category: 'truck' },
-  { make: 'Ram', model: '1500', category: 'truck' },
-  { make: 'Toyota', model: 'Tacoma', category: 'truck' },
-  { make: 'Toyota', model: 'Camry', category: 'car' },
-  { make: 'Honda', model: 'Accord', category: 'car' },
-  { make: 'Toyota', model: 'Corolla', category: 'car' },
-  { make: 'Honda', model: 'Civic', category: 'car' },
-  { make: 'Toyota', model: 'RAV4', category: 'suv' },
-  { make: 'Honda', model: 'CR-V', category: 'suv' },
-  { make: 'Toyota', model: 'Highlander', category: 'suv' },
-  { make: 'Honda', model: 'Pilot', category: 'suv' },
-  { make: 'Ford', model: 'Explorer', category: 'suv' },
-  { make: 'Jeep', model: 'Grand Cherokee', category: 'large-suv' },
-  { make: 'Chevrolet', model: 'Tahoe', category: 'large-suv' },
-  { make: 'Chevrolet', model: 'Equinox', category: 'suv' },
-  { make: 'Ford', model: 'Escape', category: 'suv' },
-  { make: 'Subaru', model: 'Outback', category: 'suv' },
-  { make: 'Nissan', model: 'Altima', category: 'car' },
-  { make: 'Nissan', model: 'Rogue', category: 'suv' },
+  { make: 'Ford', model: 'F-150', category: 'trucks' },
+  { make: 'Chevrolet', model: 'Silverado 1500', category: 'trucks' },
+  { make: 'Ram', model: '1500', category: 'trucks' },
+  { make: 'Toyota', model: 'Tacoma', category: 'trucks' },
+  { make: 'Toyota', model: 'Tundra', category: 'trucks' },
+  { make: 'GMC', model: 'Sierra 1500', category: 'trucks' },
+  { make: 'Toyota', model: 'RAV4', category: 'suvs' },
+  { make: 'Honda', model: 'CR-V', category: 'suvs' },
+  { make: 'Toyota', model: 'Highlander', category: 'suvs' },
+  { make: 'Honda', model: 'Pilot', category: 'suvs' },
+  { make: 'Ford', model: 'Explorer', category: 'suvs' },
+  { make: 'Jeep', model: 'Grand Cherokee', category: 'suvs' },
+  { make: 'Chevrolet', model: 'Tahoe', category: 'suvs' },
+  { make: 'Chevrolet', model: 'Equinox', category: 'suvs' },
+  { make: 'Ford', model: 'Escape', category: 'suvs' },
+  { make: 'Subaru', model: 'Outback', category: 'suvs' },
+  { make: 'Nissan', model: 'Rogue', category: 'suvs' },
+  { make: 'Mazda', model: 'CX-5', category: 'suvs' },
+  { make: 'Hyundai', model: 'Santa Fe', category: 'suvs' },
+  { make: 'Kia', model: 'Sorento', category: 'suvs' },
+  { make: 'Chevrolet', model: 'Suburban', category: 'suvs' },
+  { make: 'GMC', model: 'Yukon', category: 'suvs' },
+  { make: 'Toyota', model: 'Camry', category: 'cars' },
+  { make: 'Honda', model: 'Accord', category: 'cars' },
+  { make: 'Toyota', model: 'Corolla', category: 'cars' },
+  { make: 'Honda', model: 'Civic', category: 'cars' },
+  { make: 'Nissan', model: 'Altima', category: 'cars' },
+  { make: 'Nissan', model: 'Sentra', category: 'cars' },
+  { make: 'Mazda', model: '3', category: 'cars' },
+  { make: 'Subaru', model: 'Impreza', category: 'cars' },
+  { make: 'Hyundai', model: 'Elantra', category: 'cars' },
+  { make: 'Kia', model: 'Forte', category: 'cars' },
 ];
 
 function slugify(value) {
@@ -68,26 +81,29 @@ function parseCliArgs(argv = process.argv.slice(2)) {
   const options = {};
 
   for (const arg of argv) {
-    if (!arg.startsWith('--')) {
-      continue;
-    }
+    if (!arg.startsWith('--')) continue;
 
     const separatorIndex = arg.indexOf('=');
     const key = arg.slice(2, separatorIndex > -1 ? separatorIndex : undefined);
     const value = separatorIndex > -1 ? arg.slice(separatorIndex + 1) : 'true';
 
-    if (key) {
-      options[key] = value;
-    }
+    if (key) options[key] = value;
   }
 
   return options;
 }
 
+function isEnabled(value) {
+  return value === true || String(value ?? '').toLowerCase() === 'true';
+}
+
+function parseNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
 function parseJsonSafely(text) {
-  if (!text) {
-    return null;
-  }
+  if (!text) return null;
 
   try {
     return JSON.parse(text);
@@ -97,9 +113,7 @@ function parseJsonSafely(text) {
 }
 
 function formatError(error) {
-  if (error instanceof Error) {
-    return error.stack ?? error.message ?? 'Unknown error';
-  }
+  if (error instanceof Error) return error.stack ?? error.message ?? 'Unknown error';
 
   if (typeof error === 'object' && error !== null) {
     try {
@@ -118,20 +132,24 @@ function isObject(value) {
 
 function collectCatalogRows(value, collected, seen = new WeakSet()) {
   if (Array.isArray(value)) {
-    for (const item of value) {
-      collectCatalogRows(item, collected, seen);
-    }
-
+    for (const item of value) collectCatalogRows(item, collected, seen);
     return;
   }
 
-  if (!isObject(value) || seen.has(value)) {
-    return;
-  }
+  if (!isObject(value) || seen.has(value)) return;
 
   seen.add(value);
 
-  if ('engineSlug' in value || 'engine_slug' in value || 'yearRange' in value || 'jobCount' in value) {
+  if (
+    'engineSlug' in value ||
+    'engine_slug' in value ||
+    'yearRange' in value ||
+    'year_range' in value ||
+    'jobCount' in value ||
+    'job_count' in value ||
+    'engine' in value ||
+    'engineName' in value
+  ) {
     collected.push(value);
   }
 
@@ -141,19 +159,47 @@ function collectCatalogRows(value, collected, seen = new WeakSet()) {
 }
 
 function getEngineSlug(row) {
-  return row.engineSlug ?? row.engine_slug ?? row.source_engine_slug ?? '';
+  return row.engineSlug ?? row.engine_slug ?? row.sourceEngineSlug ?? row.source_engine_slug ?? '';
 }
 
 function getEngineName(row) {
-  return row.engine ?? row.engineName ?? row.name ?? null;
+  return row.engine ?? row.engineName ?? row.engine_name ?? row.name ?? null;
+}
+
+function getFuelType(row) {
+  return row.fuelType ?? row.fuel_type ?? row.fuel ?? row.fuelName ?? row.fuel_name ?? null;
+}
+
+function getCatalogMetadata(row) {
+  return {
+    engine: getEngineName(row),
+    engineSlug: getEngineSlug(row),
+    fuelType: getFuelType(row),
+    yearRange: row.yearRange ?? row.year_range ?? row.years ?? null,
+    jobCount: row.jobCount ?? row.job_count ?? row.jobsCount ?? row.jobs_count ?? null,
+    drivetrain: row.drivetrain ?? row.driveTrain ?? row.drive_type ?? row.driveType ?? row.drive ?? null,
+    transmission: row.transmission ?? row.transmissionType ?? row.transmission_type ?? null,
+    trim: row.trim ?? row.trimName ?? row.trim_name ?? row.sourceTrim ?? row.source_trim ?? null,
+  };
+}
+
+function printSampleCatalogRow(rows) {
+  if (rows.length === 0) {
+    console.log('debug sample catalog row: none');
+    return;
+  }
+
+  console.log('debug sample catalog row keys:');
+  console.log(Object.keys(rows[0]).sort().join(', '));
+  console.log('debug parsed catalog metadata:');
+  console.log(JSON.stringify(getCatalogMetadata(rows[0]), null, 2));
+  console.log('debug sample catalog row:');
+  console.log(JSON.stringify(rows[0], null, 2));
 }
 
 function yearRangeIncludes(year, row) {
   const requestedYear = Number(year);
-
-  if (!Number.isFinite(requestedYear)) {
-    return false;
-  }
+  if (!Number.isFinite(requestedYear)) return false;
 
   const startYear = Number(row.startYear ?? row.start_year ?? row.fromYear ?? row.from_year);
   const endYear = Number(row.endYear ?? row.end_year ?? row.toYear ?? row.to_year);
@@ -161,48 +207,57 @@ function yearRangeIncludes(year, row) {
   if (Number.isFinite(startYear) || Number.isFinite(endYear)) {
     const minYear = Number.isFinite(startYear) ? startYear : endYear;
     const maxYear = Number.isFinite(endYear) ? endYear : startYear;
-
     return requestedYear >= minYear && requestedYear <= maxYear;
   }
 
   const directYear = Number(row.year ?? row.modelYear ?? row.model_year);
-
-  if (Number.isFinite(directYear)) {
-    return requestedYear === directYear;
-  }
+  if (Number.isFinite(directYear)) return requestedYear === directYear;
 
   const range = String(row.yearRange ?? row.year_range ?? row.years ?? '').trim();
-
-  if (!range) {
-    return false;
-  }
+  if (!range) return false;
 
   const match = range.match(/^(\d{4})(?:\s*-\s*(\d{4}))?$/);
-
-  if (!match) {
-    return false;
-  }
+  if (!match) return false;
 
   const minYear = Number(match[1]);
   const maxYear = Number(match[2] ?? match[1]);
-
   return requestedYear >= minYear && requestedYear <= maxYear;
 }
 
 function getPriority(category) {
-  if (category === 'truck' || category === 'large-suv') return 115;
-  if (category === 'suv') return 110;
-  if (category === 'car') return 105;
+  if (category === 'trucks') return 115;
+  if (category === 'suvs') return 110;
+  if (category === 'cars') return 105;
   return 100;
 }
 
+function buildYearList(options) {
+  const year = parseNumber(options.year, null);
+  if (Number.isFinite(year)) return [year];
+
+  const startYear = parseNumber(options.startYear, DEFAULT_START_YEAR);
+  const endYear = parseNumber(options.endYear, DEFAULT_END_YEAR);
+  const minYear = Math.min(startYear, endYear);
+  const maxYear = Math.max(startYear, endYear);
+  const years = [];
+
+  for (let yearValue = minYear; yearValue <= maxYear; yearValue += 1) {
+    years.push(yearValue);
+  }
+
+  return years;
+}
+
 function buildTargets(options) {
-  const yearFilter = options.year === undefined ? null : Number(options.year);
-  const limit = options.limit === undefined ? null : Number(options.limit);
-  const years = Number.isFinite(yearFilter) ? [yearFilter] : targetYears;
+  const categoryFilter = String(options.category ?? 'all').toLowerCase();
+  const limit = parseNumber(options.limit, null);
+  const years = buildYearList(options);
+  const models = categoryFilter === 'all'
+    ? targetModels
+    : targetModels.filter((model) => model.category === categoryFilter);
   const targets = [];
 
-  for (const model of targetModels) {
+  for (const model of models) {
     for (const year of years) {
       targets.push({
         ...model,
@@ -253,7 +308,6 @@ async function fetchEngineCatalog(target) {
 
   const rows = [];
   collectCatalogRows(payload, rows);
-
   return { notFound: false, rows };
 }
 
@@ -264,9 +318,7 @@ function buildQueueRows(target, catalogRows) {
   for (const catalogRow of catalogRows) {
     const engineSlug = String(getEngineSlug(catalogRow) ?? '').trim().toLowerCase();
 
-    if (!engineSlug || seenEngineSlugs.has(engineSlug)) {
-      continue;
-    }
+    if (!engineSlug || seenEngineSlugs.has(engineSlug)) continue;
 
     seenEngineSlugs.add(engineSlug);
     rows.push({
@@ -279,6 +331,9 @@ function buildQueueRows(target, catalogRows) {
       engine_slug: engineSlug,
       priority: target.priority,
     });
+
+    // TODO: consider future queue/schema fields for drivetrain, transmission,
+    // trim/source_trim, engine_family, and engine_code if Open Labor exposes them consistently.
   }
 
   return rows;
@@ -293,16 +348,13 @@ async function fetchExistingQueueState() {
     .from('openlabor_import_queue')
     .select('id, year, make_slug, model_slug, engine_slug, status');
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 
   const keys = new Set();
   const statusCounts = {};
 
   for (const row of data ?? []) {
     keys.add(queueKey(row));
-
     const status = row.status ?? 'unknown';
     statusCounts[status] = (statusCounts[status] ?? 0) + 1;
   }
@@ -320,9 +372,7 @@ async function insertRowsInChunks(rows, chunkSize = 100) {
       .insert(chunk)
       .select('id');
 
-    if (error) {
-      throw error;
-    }
+    if (error) throw error;
 
     inserted += data?.length ?? 0;
   }
@@ -336,10 +386,7 @@ async function countPendingQueueRows() {
     .select('id', { count: 'exact', head: true })
     .eq('status', 'pending');
 
-  if (error) {
-    throw error;
-  }
-
+  if (error) throw error;
   return count ?? 0;
 }
 
@@ -348,9 +395,7 @@ async function countQueueStatuses() {
     .from('openlabor_import_queue')
     .select('status');
 
-  if (error) {
-    throw error;
-  }
+  if (error) throw error;
 
   const counts = {};
 
@@ -371,7 +416,10 @@ function targetLabel(target) {
 }
 
 async function main() {
-  const targets = buildTargets(parseCliArgs());
+  const options = parseCliArgs();
+  const targets = buildTargets(options);
+  const delayMs = Math.max(0, parseNumber(options.delayMs, DEFAULT_DELAY_MS));
+  const debug = isEnabled(options.debug);
   const existingQueue = await fetchExistingQueueState();
   const failedTargets = [];
   const summary = {
@@ -383,6 +431,7 @@ async function main() {
     noCatalog: 0,
     failed: 0,
   };
+  let debugPrinted = false;
 
   for (let index = 0; index < targets.length; index += 1) {
     const target = targets[index];
@@ -393,6 +442,11 @@ async function main() {
     try {
       const catalogResult = await fetchEngineCatalog(target);
 
+      if (debug && !debugPrinted) {
+        printSampleCatalogRow(catalogResult.rows);
+        debugPrinted = true;
+      }
+
       if (catalogResult.notFound) {
         console.log(`No engine catalog found for ${targetLabel(target)}`);
         summary.noCatalog += 1;
@@ -402,9 +456,7 @@ async function main() {
         const rowsToInsert = queueRows.filter((row) => !existingQueue.keys.has(queueKey(row)));
         const insertedCount = rowsToInsert.length > 0 ? await insertRowsInChunks(rowsToInsert) : 0;
 
-        for (const row of rowsToInsert) {
-          existingQueue.keys.add(queueKey(row));
-        }
+        for (const row of rowsToInsert) existingQueue.keys.add(queueKey(row));
 
         summary.catalogRowsFound += catalogResult.rows.length;
         summary.matchingEngineRowsFound += queueRows.length;
@@ -421,9 +473,7 @@ async function main() {
       console.error(`  failed: ${formatError(error)}`);
     }
 
-    if (index < targets.length - 1) {
-      await sleep(requestDelayMs);
-    }
+    if (index < targets.length - 1) await sleep(delayMs);
   }
 
   const pendingCount = await countPendingQueueRows();

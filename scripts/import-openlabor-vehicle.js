@@ -74,7 +74,8 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     const value = separatorIndex > -1 ? arg.slice(separatorIndex + 1) : 'true';
 
     if (key) {
-      options[key] = value;
+      const normalizedKey = key === 'fuel-type' ? 'fuelType' : key;
+      options[normalizedKey] = value;
     }
   }
 
@@ -82,7 +83,7 @@ function parseCliArgs(argv = process.argv.slice(2)) {
 }
 
 function hasVehicleArgs(options) {
-  return ['year', 'make', 'model', 'makeSlug', 'modelSlug', 'engine', 'engineSlug'].some(
+  return ['year', 'make', 'model', 'makeSlug', 'modelSlug', 'engine', 'engineSlug', 'fuelType'].some(
     (key) => options[key] !== undefined,
   );
 }

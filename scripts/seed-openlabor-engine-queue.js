@@ -58,6 +58,10 @@ function parseCliArgs(argv = process.argv.slice(2)) {
   return options;
 }
 
+function isEnabled(value) {
+  return value === true || String(value ?? '').toLowerCase() === 'true';
+}
+
 function parseJsonSafely(text) {
   if (!text) {
     return null;
@@ -105,7 +109,16 @@ function collectCatalogRows(value, collected, seen = new WeakSet()) {
 
   seen.add(value);
 
-  if ('engineSlug' in value || 'engine_slug' in value || 'yearRange' in value || 'jobCount' in value) {
+  if (
+    'engineSlug' in value ||
+    'engine_slug' in value ||
+    'yearRange' in value ||
+    'year_range' in value ||
+    'jobCount' in value ||
+    'job_count' in value ||
+    'engine' in value ||
+    'engineName' in value
+  ) {
     collected.push(value);
   }
 
@@ -115,15 +128,42 @@ function collectCatalogRows(value, collected, seen = new WeakSet()) {
 }
 
 function getEngineSlug(row) {
-  return row.engineSlug ?? row.engine_slug ?? row.source_engine_slug ?? '';
+  return row.engineSlug ?? row.engine_slug ?? row.sourceEngineSlug ?? row.source_engine_slug ?? '';
 }
 
 function getEngineName(row) {
-  return row.engine ?? row.engineName ?? row.name ?? null;
+  return row.engine ?? row.engineName ?? row.engine_name ?? row.name ?? null;
 }
 
 function getFuelType(row) {
-  return row.fuelType ?? row.fuel_type ?? row.fuel ?? null;
+  return row.fuelType ?? row.fuel_type ?? row.fuel ?? row.fuelName ?? row.fuel_name ?? null;
+}
+
+function getCatalogMetadata(row) {
+  return {
+    engine: getEngineName(row),
+    engineSlug: getEngineSlug(row),
+    fuelType: getFuelType(row),
+    yearRange: row.yearRange ?? row.year_range ?? row.years ?? null,
+    jobCount: row.jobCount ?? row.job_count ?? row.jobsCount ?? row.jobs_count ?? null,
+    drivetrain: row.drivetrain ?? row.driveTrain ?? row.drive_type ?? row.driveType ?? row.drive ?? null,
+    transmission: row.transmission ?? row.transmissionType ?? row.transmission_type ?? null,
+    trim: row.trim ?? row.trimName ?? row.trim_name ?? row.sourceTrim ?? row.source_trim ?? null,
+  };
+}
+
+function printSampleCatalogRow(rows) {
+  if (rows.length === 0) {
+    console.log('debug sample catalog row: none');
+    return;
+  }
+
+  console.log('debug sample catalog row keys:');
+  console.log(Object.keys(rows[0]).sort().join(', '));
+  console.log('debug parsed catalog metadata:');
+  console.log(JSON.stringify(getCatalogMetadata(rows[0]), null, 2));
+  console.log('debug sample catalog row:');
+  console.log(JSON.stringify(rows[0], null, 2));
 }
 
 function yearRangeIncludes(year, row) {
@@ -243,6 +283,9 @@ function buildQueueRows(vehicle, catalogRows) {
       engine_slug: engineSlug,
       priority: 110,
     });
+
+    // TODO: consider future queue/schema fields for drivetrain, transmission,
+    // trim/source_trim, engine_family, and engine_code if Open Labor exposes them consistently.
   }
 
   return rows;
@@ -310,12 +353,17 @@ async function countPendingQueueRows() {
 }
 
 async function main() {
-  const vehicle = requireVehicleOptions(parseCliArgs());
+  const cliOptions = parseCliArgs();
+  const vehicle = requireVehicleOptions(cliOptions);
   const catalogResult = await fetchEngineCatalog(vehicle);
 
   if (catalogResult.notFound) {
     console.log(`No engine catalog found for ${vehicle.year} ${vehicle.make} ${vehicle.model}.`);
     return;
+  }
+
+  if (isEnabled(cliOptions.debug)) {
+    printSampleCatalogRow(catalogResult.rows);
   }
 
   const matchingYearRows = catalogResult.rows.filter((row) => yearRangeIncludes(vehicle.year, row));
