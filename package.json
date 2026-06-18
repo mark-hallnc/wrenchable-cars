@@ -17,6 +17,7 @@
     "seed:openlabor:engines:batch": "node scripts/seed-openlabor-engine-batch.js",
     "data:process": "node scripts/process-data.js",
     "data:status": "node scripts/data-status.js",
+    "data:audit:core": "node scripts/audit-core-repair-coverage.js",
     "recalculate:scores": "node scripts/recalculate-wrenchability-scores.js"
   },
   "dependencies": {
