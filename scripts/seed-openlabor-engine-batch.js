@@ -28,44 +28,93 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
   },
 });
 
-const DEFAULT_START_YEAR = 2010;
-const DEFAULT_END_YEAR = 2022;
+const DEFAULT_START_YEAR = 2005;
+const DEFAULT_END_YEAR = 2024;
 const DEFAULT_DELAY_MS = 750;
+const LOW_DAILY_RATE_LIMIT_THRESHOLD = 25;
 
-const targetModels = [
-  { make: 'Ford', model: 'F-150', category: 'trucks' },
-  { make: 'Chevrolet', model: 'Silverado 1500', category: 'trucks' },
-  { make: 'Ram', model: '1500', category: 'trucks' },
-  { make: 'Toyota', model: 'Tacoma', category: 'trucks' },
-  { make: 'Toyota', model: 'Tundra', category: 'trucks' },
-  { make: 'GMC', model: 'Sierra 1500', category: 'trucks' },
-  { make: 'Toyota', model: 'RAV4', category: 'suvs' },
-  { make: 'Honda', model: 'CR-V', category: 'suvs' },
-  { make: 'Toyota', model: 'Highlander', category: 'suvs' },
-  { make: 'Honda', model: 'Pilot', category: 'suvs' },
-  { make: 'Ford', model: 'Explorer', category: 'suvs' },
-  { make: 'Jeep', model: 'Grand Cherokee', category: 'suvs' },
-  { make: 'Chevrolet', model: 'Tahoe', category: 'suvs' },
-  { make: 'Chevrolet', model: 'Equinox', category: 'suvs' },
-  { make: 'Ford', model: 'Escape', category: 'suvs' },
-  { make: 'Subaru', model: 'Outback', category: 'suvs' },
-  { make: 'Nissan', model: 'Rogue', category: 'suvs' },
-  { make: 'Mazda', model: 'CX-5', category: 'suvs' },
-  { make: 'Hyundai', model: 'Santa Fe', category: 'suvs' },
-  { make: 'Kia', model: 'Sorento', category: 'suvs' },
-  { make: 'Chevrolet', model: 'Suburban', category: 'suvs' },
-  { make: 'GMC', model: 'Yukon', category: 'suvs' },
-  { make: 'Toyota', model: 'Camry', category: 'cars' },
-  { make: 'Honda', model: 'Accord', category: 'cars' },
-  { make: 'Toyota', model: 'Corolla', category: 'cars' },
-  { make: 'Honda', model: 'Civic', category: 'cars' },
-  { make: 'Nissan', model: 'Altima', category: 'cars' },
-  { make: 'Nissan', model: 'Sentra', category: 'cars' },
-  { make: 'Mazda', model: '3', category: 'cars' },
-  { make: 'Subaru', model: 'Impreza', category: 'cars' },
-  { make: 'Hyundai', model: 'Elantra', category: 'cars' },
-  { make: 'Kia', model: 'Forte', category: 'cars' },
-];
+const targetModelsByCategory = {
+  trucks: [
+    { make: 'Ford', model: 'F-150' },
+    { make: 'Ford', model: 'F-250 Super Duty' },
+    { make: 'Chevrolet', model: 'Silverado 1500' },
+    { make: 'Chevrolet', model: 'Silverado 2500 HD' },
+    { make: 'GMC', model: 'Sierra 1500' },
+    { make: 'GMC', model: 'Sierra 2500 HD' },
+    { make: 'Ram', model: '1500' },
+    { make: 'Ram', model: '2500' },
+    { make: 'Toyota', model: 'Tacoma' },
+    { make: 'Toyota', model: 'Tundra' },
+    { make: 'Nissan', model: 'Frontier' },
+    { make: 'Nissan', model: 'Titan' },
+    { make: 'Chevrolet', model: 'Colorado' },
+    { make: 'GMC', model: 'Canyon' },
+    { make: 'Ford', model: 'Ranger' },
+  ],
+  suvs: [
+    { make: 'Toyota', model: 'RAV4' },
+    { make: 'Honda', model: 'CR-V' },
+    { make: 'Toyota', model: 'Highlander' },
+    { make: 'Honda', model: 'Pilot' },
+    { make: 'Ford', model: 'Explorer' },
+    { make: 'Jeep', model: 'Grand Cherokee' },
+    { make: 'Chevrolet', model: 'Tahoe' },
+    { make: 'Chevrolet', model: 'Suburban' },
+    { make: 'GMC', model: 'Yukon' },
+    { make: 'Chevrolet', model: 'Equinox' },
+    { make: 'Ford', model: 'Escape' },
+    { make: 'Subaru', model: 'Outback' },
+    { make: 'Subaru', model: 'Forester' },
+    { make: 'Nissan', model: 'Rogue' },
+    { make: 'Nissan', model: 'Pathfinder' },
+    { make: 'Toyota', model: '4Runner' },
+    { make: 'Jeep', model: 'Wrangler' },
+    { make: 'Jeep', model: 'Cherokee' },
+    { make: 'Mazda', model: 'CX-5' },
+    { make: 'Hyundai', model: 'Santa Fe' },
+    { make: 'Hyundai', model: 'Tucson' },
+    { make: 'Kia', model: 'Sorento' },
+    { make: 'Kia', model: 'Sportage' },
+    { make: 'Dodge', model: 'Durango' },
+    { make: 'Acura', model: 'MDX' },
+    { make: 'Lexus', model: 'RX 350' },
+  ],
+  cars: [
+    { make: 'Toyota', model: 'Camry' },
+    { make: 'Honda', model: 'Accord' },
+    { make: 'Toyota', model: 'Corolla' },
+    { make: 'Honda', model: 'Civic' },
+    { make: 'Nissan', model: 'Altima' },
+    { make: 'Nissan', model: 'Sentra' },
+    { make: 'Mazda', model: '3' },
+    { make: 'Mazda', model: '6' },
+    { make: 'Subaru', model: 'Impreza' },
+    { make: 'Subaru', model: 'Legacy' },
+    { make: 'Hyundai', model: 'Elantra' },
+    { make: 'Hyundai', model: 'Sonata' },
+    { make: 'Kia', model: 'Forte' },
+    { make: 'Kia', model: 'Optima' },
+    { make: 'Ford', model: 'Fusion' },
+    { make: 'Chevrolet', model: 'Malibu' },
+    { make: 'Chevrolet', model: 'Impala' },
+    { make: 'Volkswagen', model: 'Jetta' },
+    { make: 'Volkswagen', model: 'Passat' },
+    { make: 'BMW', model: '328i' },
+    { make: 'BMW', model: '330i' },
+    { make: 'Toyota', model: 'Prius' },
+  ],
+  vans: [
+    { make: 'Toyota', model: 'Sienna' },
+    { make: 'Honda', model: 'Odyssey' },
+    { make: 'Chrysler', model: 'Pacifica' },
+    { make: 'Dodge', model: 'Grand Caravan' },
+    { make: 'Kia', model: 'Sedona' },
+  ],
+};
+
+const targetModels = Object.entries(targetModelsByCategory).flatMap(([category, models]) =>
+  models.map((model) => ({ ...model, category })),
+);
 
 function slugify(value) {
   return String(value ?? '')
@@ -228,7 +277,22 @@ function getPriority(category) {
   if (category === 'trucks') return 115;
   if (category === 'suvs') return 110;
   if (category === 'cars') return 105;
+  if (category === 'vans') return 108;
   return 100;
+}
+
+function normalizeFilter(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function getSelectedCategories(options) {
+  const categoryFilter = normalizeFilter(options.category || 'all');
+  const validCategories = Object.keys(targetModelsByCategory);
+
+  if (categoryFilter === 'all') return validCategories;
+  if (validCategories.includes(categoryFilter)) return [categoryFilter];
+
+  throw new Error(`Unsupported category "${options.category}". Use trucks, suvs, cars, vans, or all.`);
 }
 
 function buildYearList(options) {
@@ -249,12 +313,16 @@ function buildYearList(options) {
 }
 
 function buildTargets(options) {
-  const categoryFilter = String(options.category ?? 'all').toLowerCase();
   const limit = parseNumber(options.limit, null);
   const years = buildYearList(options);
-  const models = categoryFilter === 'all'
-    ? targetModels
-    : targetModels.filter((model) => model.category === categoryFilter);
+  const selectedCategories = getSelectedCategories(options);
+  const makeFilter = normalizeFilter(options.make);
+  const modelFilter = normalizeFilter(options.model);
+  const models = targetModels.filter((model) =>
+    selectedCategories.includes(model.category) &&
+    (!makeFilter || normalizeFilter(model.make) === makeFilter) &&
+    (!modelFilter || normalizeFilter(model.model) === modelFilter)
+  );
   const targets = [];
 
   for (const model of models) {
@@ -276,27 +344,72 @@ function buildTargets(options) {
   return targets;
 }
 
-async function fetchEngineCatalog(target) {
-  const url = new URL('https://openlaborproject.com/api/v1/vehicles');
-  url.searchParams.set('make', target.makeSlug);
-  url.searchParams.set('model', target.modelSlug);
+function getPlan(options, targets, delayMs) {
+  const years = buildYearList(options);
+  const selectedCategories = getSelectedCategories(options);
+  const limit = parseNumber(options.limit, null);
+  const maxQueueRows = parseNumber(options.maxQueueRows, null);
 
-  const response = await fetch(url, {
-    method: 'GET',
-    headers: {
-      'x-api-key': apiKey,
-      accept: 'application/json',
-    },
-  });
+  return {
+    selectedCategories,
+    startYear: Math.min(...years),
+    endYear: Math.max(...years),
+    targetCount: targets.length,
+    limit: Number.isFinite(limit) ? Math.floor(limit) : null,
+    maxQueueRows: Number.isFinite(maxQueueRows) && maxQueueRows >= 0 ? Math.floor(maxQueueRows) : null,
+    make: options.make ?? null,
+    model: options.model ?? null,
+    dryRun: isEnabled(options.dryRun) || isEnabled(options['dry-run']),
+    delayMs,
+  };
+}
 
+function printPlan(plan) {
+  console.log('engine batch seed plan');
+  console.log(`selected categories: ${plan.selectedCategories.join(', ')}`);
+  console.log(`year range: ${plan.startYear}-${plan.endYear}`);
+  console.log(`year/make/model targets: ${plan.targetCount}`);
+  console.log(`limit: ${plan.limit ?? 'none'}`);
+  console.log(`max queue rows: ${plan.maxQueueRows ?? 'none'}`);
+  console.log(`make filter: ${plan.make ?? 'none'}`);
+  console.log(`model filter: ${plan.model ?? 'none'}`);
+  console.log(`dry run: ${plan.dryRun ? 'yes' : 'no'}`);
+  console.log(`delayMs: ${plan.delayMs}`);
+}
+
+function getRetryAfterMilliseconds(response) {
+  const retryAfter = response.headers.get('retry-after');
+  if (!retryAfter) return 60_000;
+
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+
+  const retryDate = Date.parse(retryAfter);
+  if (Number.isFinite(retryDate)) return Math.max(0, retryDate - Date.now());
+
+  return 60_000;
+}
+
+function getRateLimitInfo(response) {
+  const daily = Number(response.headers.get('x-ratelimit-remaining-daily'));
+  const minute = Number(response.headers.get('x-ratelimit-remaining-minute'));
+
+  return {
+    remainingDaily: Number.isFinite(daily) ? daily : null,
+    remainingMinute: Number.isFinite(minute) ? minute : null,
+  };
+}
+
+async function readCatalogResponse(response) {
   const responseText = await response.text();
   const payload = parseJsonSafely(responseText);
+  const rateLimit = getRateLimitInfo(response);
 
   if (!response.ok) {
     const errorDetails = payload?.error;
 
     if (response.status === 404 && errorDetails?.code === 'NOT_FOUND') {
-      return { notFound: true, rows: [] };
+      return { notFound: true, rows: [], rateLimit };
     }
 
     const errorMessage = errorDetails && (errorDetails.code || errorDetails.message)
@@ -308,7 +421,35 @@ async function fetchEngineCatalog(target) {
 
   const rows = [];
   collectCatalogRows(payload, rows);
-  return { notFound: false, rows };
+  return { notFound: false, rows, rateLimit };
+}
+
+async function fetchEngineCatalog(target) {
+  const url = new URL('https://openlaborproject.com/api/v1/vehicles');
+  url.searchParams.set('make', target.makeSlug);
+  url.searchParams.set('model', target.modelSlug);
+
+  for (let attempt = 0; attempt <= 1; attempt += 1) {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'x-api-key': apiKey,
+        accept: 'application/json',
+      },
+    });
+
+    if (response.status === 429 && attempt === 0) {
+      const waitMs = getRetryAfterMilliseconds(response);
+      console.warn(`  rate limited by Open Labor; waiting ${Math.ceil(waitMs / 1000)} seconds before one retry`);
+      await response.text();
+      await sleep(waitMs);
+      continue;
+    }
+
+    return readCatalogResponse(response);
+  }
+
+  throw new Error('Open Labor vehicle catalog request failed after retry.');
 }
 
 function buildQueueRows(target, catalogRows) {
@@ -344,11 +485,7 @@ function queueKey(row) {
 }
 
 async function fetchExistingQueueState() {
-  const { data, error } = await supabase
-    .from('openlabor_import_queue')
-    .select('id, year, make_slug, model_slug, engine_slug, status');
-
-  if (error) throw error;
+  const data = await selectAllQueueRows('id, year, make_slug, model_slug, engine_slug, status');
 
   const keys = new Set();
   const statusCounts = {};
@@ -360,6 +497,30 @@ async function fetchExistingQueueState() {
   }
 
   return { keys, statusCounts };
+}
+
+async function selectAllQueueRows(selectColumns) {
+  const pageSize = 1000;
+  const rows = [];
+  let start = 0;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('openlabor_import_queue')
+      .select(selectColumns)
+      .range(start, start + pageSize - 1);
+
+    if (error) throw error;
+
+    const pageRows = data ?? [];
+    rows.push(...pageRows);
+
+    if (pageRows.length < pageSize) break;
+
+    start += pageSize;
+  }
+
+  return rows;
 }
 
 async function insertRowsInChunks(rows, chunkSize = 100) {
@@ -391,11 +552,7 @@ async function countPendingQueueRows() {
 }
 
 async function countQueueStatuses() {
-  const { data, error } = await supabase
-    .from('openlabor_import_queue')
-    .select('status');
-
-  if (error) throw error;
+  const data = await selectAllQueueRows('status');
 
   const counts = {};
 
@@ -420,6 +577,15 @@ async function main() {
   const targets = buildTargets(options);
   const delayMs = Math.max(0, parseNumber(options.delayMs, DEFAULT_DELAY_MS));
   const debug = isEnabled(options.debug);
+  const dryRun = isEnabled(options.dryRun) || isEnabled(options['dry-run']);
+  const maxQueueRowsOption = parseNumber(options.maxQueueRows, null);
+  const maxQueueRows = Number.isFinite(maxQueueRowsOption) && maxQueueRowsOption >= 0
+    ? Math.floor(maxQueueRowsOption)
+    : null;
+  const plan = getPlan(options, targets, delayMs);
+
+  printPlan(plan);
+
   const existingQueue = await fetchExistingQueueState();
   const failedTargets = [];
   const summary = {
@@ -432,15 +598,23 @@ async function main() {
     failed: 0,
   };
   let debugPrinted = false;
+  let stoppedEarlyReason = null;
+  let remainingDailyRateLimit = null;
 
   for (let index = 0; index < targets.length; index += 1) {
+    if (maxQueueRows !== null && summary.inserted >= maxQueueRows) {
+      stoppedEarlyReason = `maxQueueRows reached (${maxQueueRows})`;
+      break;
+    }
+
     const target = targets[index];
     summary.attempted += 1;
 
-    console.log(`Checking ${targetLabel(target)}...`);
+    console.log(`[${index + 1}/${targets.length}] Checking ${targetLabel(target)}...`);
 
     try {
       const catalogResult = await fetchEngineCatalog(target);
+      remainingDailyRateLimit = catalogResult.rateLimit?.remainingDaily ?? remainingDailyRateLimit;
 
       if (debug && !debugPrinted) {
         printSampleCatalogRow(catalogResult.rows);
@@ -448,24 +622,47 @@ async function main() {
       }
 
       if (catalogResult.notFound) {
-        console.log(`No engine catalog found for ${targetLabel(target)}`);
+        console.log('  catalog rows: 0; engine rows: 0; inserted: 0; existing: 0; skipped/no catalog: yes');
         summary.noCatalog += 1;
       } else {
         const matchingYearRows = catalogResult.rows.filter((row) => yearRangeIncludes(target.year, row));
         const queueRows = buildQueueRows(target, matchingYearRows);
-        const rowsToInsert = queueRows.filter((row) => !existingQueue.keys.has(queueKey(row)));
-        const insertedCount = rowsToInsert.length > 0 ? await insertRowsInChunks(rowsToInsert) : 0;
+        const newRows = queueRows.filter((row) => !existingQueue.keys.has(queueKey(row)));
+        const remainingQueueSlots = maxQueueRows === null
+          ? newRows.length
+          : Math.max(0, maxQueueRows - summary.inserted);
+        const rowsToInsert = newRows.slice(0, remainingQueueSlots);
+        const insertedCount = dryRun || rowsToInsert.length === 0
+          ? 0
+          : await insertRowsInChunks(rowsToInsert);
 
         for (const row of rowsToInsert) existingQueue.keys.add(queueKey(row));
 
         summary.catalogRowsFound += catalogResult.rows.length;
         summary.matchingEngineRowsFound += queueRows.length;
         summary.inserted += insertedCount;
-        summary.alreadyExisting += queueRows.length - rowsToInsert.length;
+        summary.alreadyExisting += queueRows.length - newRows.length;
 
         console.log(
-          `  catalog rows: ${catalogResult.rows.length}; engine rows: ${queueRows.length}; inserted: ${insertedCount}; existing: ${queueRows.length - rowsToInsert.length}`,
+          `  catalog rows: ${catalogResult.rows.length}; engine rows: ${queueRows.length}; inserted: ${insertedCount}${dryRun ? ' (dry run)' : ''}; existing: ${queueRows.length - newRows.length}; skipped/no catalog: no`,
         );
+
+        if (maxQueueRows !== null && !dryRun && rowsToInsert.length < newRows.length) {
+          stoppedEarlyReason = `maxQueueRows reached (${maxQueueRows})`;
+          break;
+        }
+      }
+
+      const remainingMinute = catalogResult.rateLimit?.remainingMinute;
+      if (remainingDailyRateLimit !== null || remainingMinute !== null) {
+        console.log(
+          `  rate limit remaining: daily ${remainingDailyRateLimit ?? 'unknown'}; minute ${remainingMinute ?? 'unknown'}`,
+        );
+      }
+
+      if (remainingDailyRateLimit !== null && remainingDailyRateLimit < LOW_DAILY_RATE_LIMIT_THRESHOLD) {
+        stoppedEarlyReason = `remaining daily Open Labor rate limit is below ${LOW_DAILY_RATE_LIMIT_THRESHOLD} (${remainingDailyRateLimit})`;
+        break;
       }
     } catch (error) {
       summary.failed += 1;
@@ -480,6 +677,9 @@ async function main() {
   const statusCounts = await countQueueStatuses();
 
   console.log('engine batch seed complete');
+  if (stoppedEarlyReason) {
+    console.log(`stopped early: ${stoppedEarlyReason}`);
+  }
   console.log(`targets attempted: ${summary.attempted}`);
   console.log(`catalog rows found total: ${summary.catalogRowsFound}`);
   console.log(`matching engine rows found total: ${summary.matchingEngineRowsFound}`);
@@ -493,6 +693,8 @@ async function main() {
   for (const status of Object.keys(statusCounts).sort()) {
     console.log(`  ${status}: ${statusCounts[status]}`);
   }
+
+  console.log(`remaining daily rate limit: ${remainingDailyRateLimit ?? 'unknown'}`);
 
   if (failedTargets.length > 0) {
     console.log('failed targets:');
