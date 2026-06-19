@@ -1,13 +1,16 @@
 import dotenv from 'dotenv';
 import path from 'node:path';
+import { formatError } from './lib/errors.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
 const DEFAULT_IMPORT_LIMIT = 25;
+const DEFAULT_MIN_RATE_LIMIT_REMAINING = 10;
 
 function parseCliArgs(argv = process.argv.slice(2)) {
   const args = {
     limit: DEFAULT_IMPORT_LIMIT,
+    minRateLimitRemaining: DEFAULT_MIN_RATE_LIMIT_REMAINING,
     skipImport: false,
     skipRecalculate: false,
   };
@@ -16,6 +19,11 @@ function parseCliArgs(argv = process.argv.slice(2)) {
     if (arg.startsWith('--limit=')) {
       const value = Number(arg.slice('--limit='.length));
       args.limit = Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_IMPORT_LIMIT;
+    } else if (arg.startsWith('--minRateLimitRemaining=')) {
+      const value = Number(arg.slice('--minRateLimitRemaining='.length));
+      args.minRateLimitRemaining = Number.isFinite(value) && value >= 0
+        ? Math.floor(value)
+        : DEFAULT_MIN_RATE_LIMIT_REMAINING;
     } else if (arg === '--skip-import') {
       args.skipImport = true;
     } else if (arg === '--skip-recalculate') {
@@ -39,10 +47,6 @@ function validateEnvironment() {
   }
 }
 
-function formatError(error) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function main() {
   const options = parseCliArgs();
 
@@ -55,24 +59,41 @@ async function main() {
 
   console.log('Starting Wrenchable Cars data process...');
   console.log(`Import limit: ${options.limit}`);
+  console.log(`Minimum Open Labor daily rate limit remaining: ${options.minRateLimitRemaining}`);
 
   if (options.skipImport) {
     console.log('\nStep 1: Processing Open Labor queue... skipped');
   } else {
     console.log('\nStep 1: Processing Open Labor queue...');
-    const importSummary = await runOpenLaborQueue({ limit: options.limit, log: false });
+    const importSummary = await runOpenLaborQueue({
+      limit: options.limit,
+      minRateLimitRemaining: options.minRateLimitRemaining,
+      log: false,
+    });
 
     console.log(`attempted: ${importSummary.attempted}`);
     console.log(`completed: ${importSummary.completed}`);
     console.log(`skipped: ${importSummary.skipped}`);
     console.log(`failed: ${importSummary.failed}`);
+    if (importSummary.stoppedEarly) {
+      console.log(importSummary.stopReason);
+    }
   }
 
   if (options.skipRecalculate) {
     console.log('\nStep 2: Recalculating Wrenchability scores... skipped');
   } else {
     console.log('\nStep 2: Recalculating Wrenchability scores...');
-    const scoreSummary = await recalculateScores({ log: false });
+    let scoreSummary;
+
+    try {
+      scoreSummary = await recalculateScores({ log: false });
+    } catch (error) {
+      console.error('Imports completed, but score recalculation failed.');
+      console.error(formatError(error));
+      process.exitCode = 1;
+      return;
+    }
 
     console.log(`total labor estimates processed: ${scoreSummary.totalLaborEstimatesProcessed}`);
     console.log(`repair_scores upserted: ${scoreSummary.repairScoresUpserted}`);
@@ -83,6 +104,7 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`Data process failed: ${formatError(error)}`);
+  console.error('Data process failed:');
+  console.error(formatError(error));
   process.exitCode = 1;
 });

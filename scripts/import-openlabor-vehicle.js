@@ -9,6 +9,7 @@ import {
   scoreLabelFromScore,
   vehicleScoreLabelFromScore,
 } from './lib/scoring.js';
+import { formatError, formatSupabaseError } from './lib/errors.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -126,6 +127,10 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function throwSupabaseError(action, error) {
+  throw new Error(`${action}: ${formatSupabaseError(error)}`);
+}
+
 async function updateQueueRow(queueId, patch) {
   if (!queueId) {
     return;
@@ -134,7 +139,7 @@ async function updateQueueRow(queueId, patch) {
   const { error } = await supabase.from('openlabor_import_queue').update(patch).eq('id', queueId);
 
   if (error) {
-    throw error;
+    throwSupabaseError(`Failed to update queue row ${queueId}`, error);
   }
 }
 
@@ -146,7 +151,7 @@ async function markQueueRunning(queueId) {
     .maybeSingle();
 
   if (error) {
-    throw error;
+    throwSupabaseError(`Failed to fetch queue row ${queueId}`, error);
   }
 
   if (!queueRow) {
@@ -290,22 +295,6 @@ function buildSourceNotes(job) {
   });
 }
 
-function formatError(error) {
-  if (error instanceof Error) {
-    return error.stack ?? error.message;
-  }
-
-  if (typeof error === 'object' && error !== null) {
-    try {
-      return JSON.stringify(error, null, 2);
-    } catch {
-      return String(error);
-    }
-  }
-
-  return String(error);
-}
-
 function normalizeSlug(value) {
   return String(value ?? '').trim().toLowerCase();
 }
@@ -342,7 +331,7 @@ async function selectRowsByInChunks(tableName, columnName, values, selectColumns
     const { data, error } = await query;
 
     if (error) {
-      throw error;
+      throwSupabaseError(`Failed to select ${tableName} rows by ${columnName}`, error);
     }
 
     results.push(...(data ?? []));
@@ -359,7 +348,7 @@ async function insertRowsInChunks(tableName, rows, selectColumns = '*', chunkSiz
     const { data, error } = await supabase.from(tableName).insert(chunk).select(selectColumns);
 
     if (error) {
-      throw error;
+      throwSupabaseError(`Failed to insert ${tableName} rows`, error);
     }
 
     results.push(...(data ?? []));
@@ -372,7 +361,7 @@ async function updateRowById(tableName, id, row, selectColumns = '*') {
   const { data, error } = await supabase.from(tableName).update(row).eq('id', id).select(selectColumns).single();
 
   if (error) {
-    throw error;
+    throwSupabaseError(`Failed to update ${tableName} row ${id}`, error);
   }
 
   return data;
@@ -441,7 +430,7 @@ async function upsertRowByFilters(tableName, filters, row, selectColumns = '*') 
   const { data: existingRow, error: lookupError } = await existingQuery.maybeSingle();
 
   if (lookupError) {
-    throw lookupError;
+    throwSupabaseError(`Failed to look up ${tableName}`, lookupError);
   }
 
   if (existingRow) {
@@ -450,7 +439,7 @@ async function upsertRowByFilters(tableName, filters, row, selectColumns = '*') 
       .single();
 
     if (updateError) {
-      throw updateError;
+      throwSupabaseError(`Failed to update ${tableName}`, updateError);
     }
 
     return { row: data, action: 'updated' };
@@ -459,7 +448,7 @@ async function upsertRowByFilters(tableName, filters, row, selectColumns = '*') 
   const { data, error: insertError } = await supabase.from(tableName).insert(row).select(selectColumns).single();
 
   if (insertError) {
-    throw insertError;
+    throwSupabaseError(`Failed to insert ${tableName}`, insertError);
   }
 
   return { row: data, action: 'inserted' };
@@ -640,7 +629,7 @@ export async function importOpenLaborVehicle(options = {}) {
       .eq('source', 'openlabor');
 
     if (existingLaborEstimates.error) {
-      throw existingLaborEstimates.error;
+      throwSupabaseError('Failed to fetch existing labor estimates', existingLaborEstimates.error);
     }
 
     const laborEstimateByTaskId = new Map(
@@ -752,7 +741,7 @@ export async function importOpenLaborVehicle(options = {}) {
       .eq('vehicle_id', vehicleId);
 
     if (existingRepairScores.error) {
-      throw existingRepairScores.error;
+      throwSupabaseError('Failed to fetch existing repair scores', existingRepairScores.error);
     }
 
     const repairScoreByTaskId = new Map(
@@ -837,7 +826,7 @@ export async function importOpenLaborVehicle(options = {}) {
         .maybeSingle();
 
       if (existingVehicleScore.error) {
-        throw existingVehicleScore.error;
+        throwSupabaseError('Failed to fetch existing vehicle score', existingVehicleScore.error);
       }
 
       if (existingVehicleScore.data) {

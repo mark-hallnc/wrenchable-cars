@@ -9,6 +9,7 @@ import {
   scoreLabelFromScore,
   vehicleScoreLabelFromScore,
 } from './lib/scoring.js';
+import { formatError, formatSupabaseError } from './lib/errors.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -119,7 +120,7 @@ async function selectAllRows(tableName, selectColumns, filters = []) {
     const { data, error } = await query;
 
     if (error) {
-      throw error;
+      throw new Error(`Failed to fetch ${tableName}: ${formatSupabaseError(error)}`);
     }
 
     const pageRows = data ?? [];
@@ -146,7 +147,7 @@ async function upsertRowsInChunks(tableName, rows, onConflict, selectColumns, ch
       .select(selectColumns);
 
     if (error) {
-      throw error;
+      throw new Error(`Failed to upsert ${tableName}: ${formatSupabaseError(error)}`);
     }
 
     upsertedCount += data?.length ?? 0;
@@ -334,7 +335,8 @@ const isDirectExecution = process.argv[1]
 
 if (isDirectExecution) {
   recalculateScores().catch((error) => {
-    console.error(`Recalculation failed: ${error instanceof Error ? error.message : String(error)}`);
+    console.error('Recalculation failed:');
+    console.error(formatError(error));
     process.exitCode = 1;
   });
 }
