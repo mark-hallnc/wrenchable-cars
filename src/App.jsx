@@ -2304,9 +2304,11 @@ function App() {
     <div className="app-shell">
       <header className="site-header">
         <a className="brand" href="#top" aria-label={`${BRAND.name} home`}>
-          <span className="brand-mark" aria-hidden="true">
-            {BRAND.name.split(' ').map((word) => word[0]).join('')}
-          </span>
+          <img
+            className="brand-logo"
+            src={`${import.meta.env.BASE_URL}icon-192.png`}
+            alt="Wrenchable Cars logo"
+          />
           <span>{BRAND.name}</span>
         </a>
         <nav className="main-nav" aria-label="Primary navigation">
