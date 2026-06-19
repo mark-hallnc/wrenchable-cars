@@ -175,6 +175,65 @@ function getWeightedAverage(scores, repairTasksById) {
   return Number((weightedTotal / totalWeight).toFixed(2));
 }
 
+function hasValidNumber(value) {
+  return Number.isFinite(Number(value));
+}
+
+function dedupeByKey(rows, getKey, chooseWinner) {
+  const dedupedRowsByKey = new Map();
+  let duplicateCount = 0;
+
+  for (const row of rows) {
+    const key = getKey(row);
+
+    if (!dedupedRowsByKey.has(key)) {
+      dedupedRowsByKey.set(key, row);
+      continue;
+    }
+
+    duplicateCount += 1;
+    dedupedRowsByKey.set(key, chooseWinner(dedupedRowsByKey.get(key), row));
+  }
+
+  return {
+    rows: [...dedupedRowsByKey.values()],
+    duplicateCount,
+  };
+}
+
+function chooseRepairScoreWinner(existingRow, nextRow) {
+  const existingHasLaborHours = hasValidNumber(existingRow.labor_hours);
+  const nextHasLaborHours = hasValidNumber(nextRow.labor_hours);
+
+  if (existingHasLaborHours !== nextHasLaborHours) {
+    return nextHasLaborHours ? nextRow : existingRow;
+  }
+
+  const existingHasScore = hasValidNumber(existingRow.wrenchability_score);
+  const nextHasScore = hasValidNumber(nextRow.wrenchability_score);
+
+  if (existingHasScore !== nextHasScore) {
+    return nextHasScore ? nextRow : existingRow;
+  }
+
+  if (existingHasLaborHours && nextHasLaborHours) {
+    return Number(nextRow.labor_hours) < Number(existingRow.labor_hours) ? nextRow : existingRow;
+  }
+
+  return existingRow;
+}
+
+function chooseVehicleScoreWinner(existingRow, nextRow) {
+  const existingHasOverallScore = hasValidNumber(existingRow.overall_score);
+  const nextHasOverallScore = hasValidNumber(nextRow.overall_score);
+
+  if (existingHasOverallScore !== nextHasOverallScore) {
+    return nextHasOverallScore ? nextRow : existingRow;
+  }
+
+  return nextRow;
+}
+
 export async function recalculateScores(options = {}) {
   const log = options.log ?? true;
   const [laborEstimates, repairTasks, vehicles] = await Promise.all([
@@ -255,16 +314,26 @@ export async function recalculateScores(options = {}) {
     }
   }
 
+  const dedupedRepairScores = dedupeByKey(
+    repairScoreRows,
+    (row) => `${row.vehicle_id}:${row.repair_task_id}`,
+    chooseRepairScoreWinner,
+  );
+
+  if (dedupedRepairScores.duplicateCount > 0) {
+    console.warn(`Deduped repair_scores before upsert: ${dedupedRepairScores.duplicateCount} duplicate rows removed.`);
+  }
+
   const repairScoresUpserted = await upsertRowsInChunks(
     'repair_scores',
-    repairScoreRows,
+    dedupedRepairScores.rows,
     'vehicle_id,repair_task_id',
     'id, vehicle_id, repair_task_id, labor_hours, wrenchability_score, score_label, percentile, explanation, calculated_at',
   );
 
   const repairScoresByVehicleId = new Map();
 
-  for (const row of repairScoreRows) {
+  for (const row of dedupedRepairScores.rows) {
     if (!repairScoresByVehicleId.has(row.vehicle_id)) {
       repairScoresByVehicleId.set(row.vehicle_id, []);
     }
@@ -302,9 +371,19 @@ export async function recalculateScores(options = {}) {
     });
   }
 
+  const dedupedVehicleScores = dedupeByKey(
+    vehicleScoreRows,
+    (row) => row.vehicle_id,
+    chooseVehicleScoreWinner,
+  );
+
+  if (dedupedVehicleScores.duplicateCount > 0) {
+    console.warn(`Deduped vehicle_scores before upsert: ${dedupedVehicleScores.duplicateCount} duplicate rows removed.`);
+  }
+
   const vehicleScoresRecalculated = await upsertRowsInChunks(
     'vehicle_scores',
-    vehicleScoreRows,
+    dedupedVehicleScores.rows,
     'vehicle_id',
     'id, vehicle_id, overall_score, score_label, verdict, calculated_at',
   );
