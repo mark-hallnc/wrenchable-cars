@@ -2,15 +2,7 @@ import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  buildRepairExplanation,
-  buildVehicleVerdict,
-  scoreFromHours,
-  scoreLabelFromScore,
-  vehicleScoreLabelFromScore,
-} from './lib/scoring.js';
 import { formatError, formatSupabaseError } from './lib/errors.js';
-import { COMMON_OWNERSHIP_REPAIR_SLUGS } from '../src/lib/commonRepairs.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -414,18 +406,6 @@ async function fetchOpenLaborData(vehicle) {
   return { payload, response };
 }
 
-function findMatchingTargetJob(uniqueJobs, targetCandidates) {
-  for (const candidate of targetCandidates) {
-    const match = uniqueJobs.find((job) => normalizeSlug(job.jobSlug) === normalizeSlug(candidate));
-
-    if (match) {
-      return match;
-    }
-  }
-
-  return null;
-}
-
 async function upsertRowByFilters(tableName, filters, row, selectColumns = '*') {
   const existingQuery = applyFilters(supabase.from(tableName).select(selectColumns), filters);
   const { data: existingRow, error: lookupError } = await existingQuery.maybeSingle();
@@ -603,7 +583,6 @@ export async function importOpenLaborVehicle(options = {}) {
     }
 
     const tasksBySlug = new Map(repairTaskResults.map((task) => [normalizeSlug(task.source_job_slug), task]));
-    const tasksById = new Map(repairTaskResults.map((task) => [task.id, task]));
 
     const laborEstimateRows = uniqueJobs
       .map((job) => {
@@ -673,168 +652,6 @@ export async function importOpenLaborVehicle(options = {}) {
       laborEstimates.push(...insertedLaborEstimates);
     }
 
-    const fallbackMatches = new Map([
-    ['headlight-bulb', ['headlight-bulb', 'headlamp-bulb']],
-    ['brake-pads-front', ['brake-pads-front', 'front-brake-pads', 'brake-pads-and-rotors-front']],
-    ['brake-pads-rear', ['brake-pads-rear', 'rear-brake-pads', 'brake-pads-and-rotors-rear']],
-    ['battery', ['battery', 'battery-replacement']],
-    ['fuel-pump', ['fuel-pump', 'fuel-pump-replacement']],
-    ['blower-motor', ['blower-motor', 'hvac-blower-motor']],
-  ]);
-
-    const repairScoreRows = [];
-
-    for (const targetJobSlug of COMMON_OWNERSHIP_REPAIR_SLUGS) {
-      const candidateSlugs = fallbackMatches.get(targetJobSlug) ?? [targetJobSlug];
-      const match = findMatchingTargetJob(uniqueJobs, candidateSlugs);
-
-      if (!match) {
-        continue;
-      }
-
-      const task = tasksBySlug.get(normalizeSlug(match.jobSlug));
-
-      if (!task) {
-        continue;
-      }
-
-      const laborHours = Number(match.hours);
-      const wrenchabilityScore = scoreFromHours(laborHours);
-
-      repairScoreRows.push({
-        vehicle_id: vehicleId,
-        repair_task_id: task.id,
-        labor_hours: laborHours,
-        wrenchability_score: wrenchabilityScore,
-        score_label: scoreLabelFromScore(wrenchabilityScore),
-        percentile: null,
-        explanation: buildRepairExplanation(laborHours),
-      });
-    }
-
-    console.log('Syncing repair scores...');
-    const existingRepairScores = await supabase
-      .from('repair_scores')
-      .select('id, vehicle_id, repair_task_id, labor_hours, wrenchability_score, score_label, percentile, explanation')
-      .eq('vehicle_id', vehicleId);
-
-    if (existingRepairScores.error) {
-      throwSupabaseError('Failed to fetch existing repair scores', existingRepairScores.error);
-    }
-
-    const repairScoreByTaskId = new Map(
-      (existingRepairScores.data ?? []).map((score) => [score.repair_task_id, score]),
-    );
-    const repairScores = [];
-    const newRepairScoreRows = [];
-
-    for (const repairScoreRow of repairScoreRows) {
-      const existingScore = repairScoreByTaskId.get(repairScoreRow.repair_task_id);
-
-      if (!existingScore) {
-        newRepairScoreRows.push(repairScoreRow);
-        continue;
-      }
-
-      const updatedScore = rowMatches(existingScore, repairScoreRow, [
-        'labor_hours',
-        'wrenchability_score',
-        'score_label',
-        'percentile',
-        'explanation',
-      ])
-        ? existingScore
-        : await updateRowById(
-            'repair_scores',
-            existingScore.id,
-            repairScoreRow,
-            'id, vehicle_id, repair_task_id, labor_hours, wrenchability_score, score_label, percentile, explanation',
-          );
-
-      repairScores.push(updatedScore);
-    }
-
-    if (newRepairScoreRows.length > 0) {
-      const insertedRepairScores = await insertRowsInChunks(
-        'repair_scores',
-        newRepairScoreRows,
-        'id, vehicle_id, repair_task_id, labor_hours, wrenchability_score, score_label, percentile, explanation',
-      );
-
-      repairScores.push(...insertedRepairScores);
-    }
-
-    const repairScoresForAverage = repairScores.length ? repairScores : repairScoreRows;
-    let overallScore = null;
-
-    if (repairScoresForAverage.length > 0) {
-      let totalWeightedScore = 0;
-      let totalWeight = 0;
-
-      for (const repairScore of repairScoresForAverage) {
-        const task = tasksById.get(repairScore.repair_task_id);
-
-        const defaultWeight = task?.default_weight ?? 1.0;
-        totalWeightedScore += Number(repairScore.wrenchability_score) * defaultWeight;
-        totalWeight += defaultWeight;
-      }
-
-      overallScore = totalWeight > 0 ? Number((totalWeightedScore / totalWeight).toFixed(1)) : null;
-    }
-
-    const vehicleScoreLabel = overallScore === null ? null : vehicleScoreLabelFromScore(overallScore);
-
-    const vehicleScoreRows = overallScore === null
-      ? []
-      : [{
-          vehicle_id: vehicleId,
-          overall_score: overallScore,
-          score_label: vehicleScoreLabel,
-          verdict: buildVehicleVerdict(),
-        }];
-
-    console.log('Syncing vehicle scores...');
-    const vehicleScores = [];
-
-    for (const vehicleScoreRow of vehicleScoreRows) {
-      const existingVehicleScore = await supabase
-        .from('vehicle_scores')
-        .select('id, vehicle_id, overall_score, score_label, verdict, calculated_at')
-        .eq('vehicle_id', vehicleScoreRow.vehicle_id)
-        .maybeSingle();
-
-      if (existingVehicleScore.error) {
-        throwSupabaseError('Failed to fetch existing vehicle score', existingVehicleScore.error);
-      }
-
-      if (existingVehicleScore.data) {
-        const updatedVehicleScore = rowMatches(existingVehicleScore.data, vehicleScoreRow, [
-          'overall_score',
-          'score_label',
-          'verdict',
-        ])
-          ? existingVehicleScore.data
-          : await updateRowById(
-              'vehicle_scores',
-              existingVehicleScore.data.id,
-              vehicleScoreRow,
-              'id, vehicle_id, overall_score, score_label, verdict, calculated_at',
-            );
-
-        vehicleScores.push(updatedVehicleScore);
-        continue;
-      }
-
-      const insertedVehicleScore = await insertRowsInChunks(
-        'vehicle_scores',
-        [vehicleScoreRow],
-        'id, vehicle_id, overall_score, score_label, verdict, calculated_at',
-        1,
-      );
-
-      vehicleScores.push(...insertedVehicleScore);
-    }
-
     const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining-Daily') ?? '';
 
     const result = {
@@ -847,8 +664,8 @@ export async function importOpenLaborVehicle(options = {}) {
       rawJobCount: collectedJobs.length,
       uniqueJobCount: uniqueJobs.length,
       laborEstimatesUpserted: laborEstimates.length,
-      repairScoresUpserted: repairScores.length,
-      overallScore,
+      repairScoresUpserted: 0,
+      overallScore: null,
       rateLimitRemaining,
     };
 
@@ -856,8 +673,7 @@ export async function importOpenLaborVehicle(options = {}) {
     console.log(`raw job count: ${result.rawJobCount}`);
     console.log(`unique job count: ${result.uniqueJobCount}`);
     console.log(`labor_estimates upserted: ${result.laborEstimatesUpserted}`);
-    console.log(`repair_scores created/updated: ${result.repairScoresUpserted}`);
-    console.log(`overall score: ${result.overallScore ?? 'pending'}`);
+    console.log('Raw labor data imported. Run npm.cmd run recalculate:scores to update scores.');
     console.log(`rate limit remaining: ${result.rateLimitRemaining}`);
 
     if (queueId) {
