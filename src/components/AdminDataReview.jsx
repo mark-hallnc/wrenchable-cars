@@ -1,8 +1,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabaseClient'
 import { formatScore } from '../lib/formatters'
+import DataStatus from './DataStatus'
 
-const ADMIN_PASSWORD = 'change-me-admin'
+const ADMIN_PASSWORD = 'adminadminadmin'
 const ADMIN_SESSION_KEY = 'wrenchable_admin_unlocked'
 
 const PAGE_SIZES = [25, 50, 100, 250]
@@ -69,7 +70,12 @@ const buildCsvValue = (value) => {
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
-export default function AdminDataReview() {
+export default function AdminDataReview({
+  dataStatusCards = [],
+  dataStatusState = 'idle',
+  dataStatusSummary = null,
+  onRefreshDataStatus,
+}) {
   const [isUnlocked, setIsUnlocked] = useState(() => {
     try {
       return window.sessionStorage?.getItem(ADMIN_SESSION_KEY) === 'true'
@@ -102,6 +108,7 @@ export default function AdminDataReview() {
   const [status, setStatus] = useState('idle')
   const [error, setError] = useState('')
   const [expandedRowId, setExpandedRowId] = useState('')
+  const [adminSection, setAdminSection] = useState('vehicles')
 
   const visibleRows = useMemo(() => {
     const searchText = filters.search.trim().toLowerCase()
@@ -252,6 +259,12 @@ export default function AdminDataReview() {
     loadRows()
   }, [isUnlocked, loadRows])
 
+  useEffect(() => {
+    if (!isUnlocked || adminSection !== 'data-status' || dataStatusState !== 'idle') return
+
+    onRefreshDataStatus?.()
+  }, [adminSection, dataStatusState, isUnlocked, onRefreshDataStatus])
+
   const unlock = (event) => {
     event.preventDefault()
 
@@ -391,6 +404,25 @@ export default function AdminDataReview() {
             </div>
           </div>
 
+          <div className="admin-section-tabs" aria-label="Admin sections">
+            <button
+              className={adminSection === 'vehicles' ? 'active' : ''}
+              type="button"
+              onClick={() => setAdminSection('vehicles')}
+            >
+              Vehicles Table
+            </button>
+            <button
+              className={adminSection === 'data-status' ? 'active' : ''}
+              type="button"
+              onClick={() => setAdminSection('data-status')}
+            >
+              Data Status
+            </button>
+          </div>
+
+          {adminSection === 'vehicles' && (
+            <>
           <div className="admin-quick-filters" aria-label="Score filters">
             {[
               { value: 'all', label: 'All' },
@@ -579,6 +611,20 @@ export default function AdminDataReview() {
               Next
             </button>
           </div>
+            </>
+          )}
+
+          {adminSection === 'data-status' && (
+            <div className="admin-data-status-section">
+              <DataStatus
+                dataStatusCards={dataStatusCards}
+                dataStatusState={dataStatusState}
+                dataStatusSummary={dataStatusSummary}
+                helperText="Database health and import progress summary."
+                onRefresh={onRefreshDataStatus}
+              />
+            </div>
+          )}
         </div>
       </section>
     </main>

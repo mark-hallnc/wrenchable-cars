@@ -5,6 +5,7 @@ export default function DataStatus({
   dataStatusCards,
   dataStatusState,
   dataStatusSummary,
+  helperText,
   onRefresh,
 }) {
   return (
@@ -13,6 +14,7 @@ export default function DataStatus({
         <div className="panel-heading">
           <p className="eyebrow">Database health</p>
           <h2>Data Status</h2>
+          {helperText && <p className="helper-text">{helperText}</p>}
         </div>
         <button
           className="secondary-button"

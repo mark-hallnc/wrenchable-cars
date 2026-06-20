@@ -1,4 +1,4 @@
-export default function Header({ brandName, activeView, onHome, onNavView }) {
+export default function Header({ brandName, onHome, onNavView }) {
   return (
     <header className="site-header">
       <a
@@ -27,13 +27,6 @@ export default function Header({ brandName, activeView, onHome, onNavView }) {
         >
           How it works
         </a>
-        <button
-          className={`status-link ${activeView === 'status' ? 'active' : ''}`}
-          type="button"
-          onClick={(event) => onNavView(event, 'status')}
-        >
-          Status
-        </button>
       </nav>
     </header>
   )

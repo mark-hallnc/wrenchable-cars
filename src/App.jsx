@@ -73,7 +73,6 @@ import Header from './components/Header'
 import Hero from './components/Hero'
 import Footer from './components/Footer'
 import SearchPanel from './components/SearchPanel'
-import DataStatus from './components/DataStatus'
 import RepairList from './components/RepairList'
 import AdminDataReview from './components/AdminDataReview'
 import PrivacyPolicyPage from './components/PrivacyPolicyPage'
@@ -135,6 +134,8 @@ function App() {
         setActiveView('rankings')
       } else if (nextUrlState.view === 'compare') {
         setActiveView('compare')
+      } else if (nextUrlState.view === 'status' || nextUrlState.view === 'data-status') {
+        setActiveView('admin')
       } else {
         setActiveView('search')
       }
@@ -340,12 +341,6 @@ function App() {
       setDataStatusState('error')
     }
   }, [])
-
-  useEffect(() => {
-    if (activeView === 'status' && dataStatusState === 'idle') {
-      loadDataStatus()
-    }
-  }, [activeView, dataStatusState, loadDataStatus])
 
   const yearOptions = useMemo(() => getUniqueYears(vehicles), [vehicles])
   const makeOptions = useMemo(
@@ -566,7 +561,8 @@ function App() {
       return
     }
 
-    if (view === 'admin') {
+    if (view === 'admin' || view === 'status' || view === 'data-status') {
+      setActiveView('admin')
       updateBrowserUrl({ view: 'admin' })
       return
     }
@@ -753,7 +749,11 @@ function App() {
         return
       }
 
-      if (initialUrlState.view === 'admin') {
+      if (
+        initialUrlState.view === 'admin' ||
+        initialUrlState.view === 'status' ||
+        initialUrlState.view === 'data-status'
+      ) {
         setActiveView('admin')
         updateBrowserUrl({ view: 'admin' }, 'replace')
         setInitialUrlHandled(true)
@@ -1166,7 +1166,6 @@ function App() {
     <div className="app-shell">
       <Header
         brandName={BRAND.name}
-        activeView={activeView}
         onHome={goToHomePage}
         onNavView={handleNavView}
       />
@@ -1174,7 +1173,12 @@ function App() {
       {isPrivacyPage ? (
         <PrivacyPolicyPage onBack={goToHomePage} />
       ) : isAdminView ? (
-        <AdminDataReview />
+        <AdminDataReview
+          dataStatusCards={dataStatusCards}
+          dataStatusState={dataStatusState}
+          dataStatusSummary={dataStatusSummary}
+          onRefreshDataStatus={loadDataStatus}
+        />
       ) : (
       <main id="top">
         <Hero>
@@ -1523,14 +1527,6 @@ function App() {
               </section>
             )}
 
-            {activeView === 'status' && (
-              <DataStatus
-                dataStatusCards={dataStatusCards}
-                dataStatusState={dataStatusState}
-                dataStatusSummary={dataStatusSummary}
-                onRefresh={loadDataStatus}
-              />
-            )}
           </div>
         </Hero>
 
