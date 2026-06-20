@@ -18,6 +18,7 @@
     "data:process": "node scripts/process-data.js",
     "data:status": "node scripts/data-status.js",
     "data:health": "node scripts/data-health.js",
+    "data:cleanup:duplicates": "node scripts/cleanup-duplicate-data.js",
     "data:audit:core": "node scripts/audit-core-repair-coverage.js",
     "recalculate:scores": "node scripts/recalculate-wrenchability-scores.js"
   },

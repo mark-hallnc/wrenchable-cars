@@ -134,7 +134,11 @@ async function selectAllRows(tableName, selectColumns, filters = {}) {
   let start = 0;
 
   while (true) {
-    let query = supabase.from(tableName).select(selectColumns).range(start, start + pageSize - 1);
+    let query = supabase
+      .from(tableName)
+      .select(selectColumns)
+      .order('id', { ascending: true })
+      .range(start, start + pageSize - 1);
 
     if (tableName === 'vehicles') {
       query = applyVehicleFilters(query, filters);
@@ -211,6 +215,10 @@ function printReport(report) {
 
   printSection('Score health');
   console.log(`vehicles missing vehicle_scores: ${report.scoreHealth.vehiclesMissingVehicleScores}`);
+  console.log(`missing score but has common ownership repair scores: ${report.scoreHealth.missingScoreWithCommonOwnershipRepairScores}`);
+  console.log(`missing score and has zero common ownership repair scores: ${report.scoreHealth.missingScoreWithZeroCommonOwnershipRepairScores}`);
+  console.log(`missing score on generic/base vehicle rows: ${report.scoreHealth.missingScoreGenericBaseVehicles}`);
+  console.log(`missing score on engine-specific vehicle rows: ${report.scoreHealth.missingScoreEngineSpecificVehicles}`);
   console.log(`vehicles with repair_scores but missing vehicle_scores: ${report.scoreHealth.vehiclesWithRepairScoresMissingVehicleScores}`);
   console.log(`vehicles with common ownership repair scores but missing vehicle_scores: ${report.scoreHealth.vehiclesWithCommonScoresMissingVehicleScores}`);
   console.log(`scored vehicles with zero repair_scores: ${report.scoreHealth.scoredVehiclesWithZeroRepairScores}`);
@@ -286,6 +294,15 @@ async function buildHealthReport(options) {
   const vehiclesWithCommonScoresMissingVehicleScores = missingVehicleScores.filter((vehicle) =>
     (commonCountsByVehicleId.get(String(vehicle.id)) ?? 0) > 0,
   );
+  const missingScoreWithZeroCommonOwnershipRepairScores = missingVehicleScores.filter((vehicle) =>
+    (commonCountsByVehicleId.get(String(vehicle.id)) ?? 0) === 0,
+  );
+  const missingScoreGenericBaseVehicles = missingVehicleScores.filter((vehicle) =>
+    !hasText(vehicle.source_engine_slug),
+  );
+  const missingScoreEngineSpecificVehicles = missingVehicleScores.filter((vehicle) =>
+    hasText(vehicle.source_engine_slug),
+  );
   const scoredVehiclesWithZeroRepairScores = vehicleScores
     .filter((score) => filteredVehicleIds.has(String(score.vehicle_id)))
     .filter((score) => !repairScoresByVehicleId.has(String(score.vehicle_id)))
@@ -333,6 +350,10 @@ async function buildHealthReport(options) {
     queueStatus,
     scoreHealth: {
       vehiclesMissingVehicleScores: missingVehicleScores.length,
+      missingScoreWithCommonOwnershipRepairScores: vehiclesWithCommonScoresMissingVehicleScores.length,
+      missingScoreWithZeroCommonOwnershipRepairScores: missingScoreWithZeroCommonOwnershipRepairScores.length,
+      missingScoreGenericBaseVehicles: missingScoreGenericBaseVehicles.length,
+      missingScoreEngineSpecificVehicles: missingScoreEngineSpecificVehicles.length,
       vehiclesWithRepairScoresMissingVehicleScores: vehiclesWithRepairScoresMissingVehicleScores.length,
       vehiclesWithCommonScoresMissingVehicleScores: vehiclesWithCommonScoresMissingVehicleScores.length,
       scoredVehiclesWithZeroRepairScores: scoredVehiclesWithZeroRepairScores.length,
@@ -360,6 +381,33 @@ async function buildHealthReport(options) {
       vehiclesWithCommonScoresMissingVehicleScores: selectExampleRows(
         vehiclesWithCommonScoresMissingVehicleScores.map((vehicle) =>
           getVehicleIssueExample(vehicle, 'has common ownership repair scores but missing vehicle_scores', {
+            common_repair_count: commonCountsByVehicleId.get(String(vehicle.id)) ?? 0,
+          }),
+        ),
+        limit,
+      ),
+      missingScoreWithZeroCommonOwnershipRepairScores: selectExampleRows(
+        missingScoreWithZeroCommonOwnershipRepairScores.map((vehicle) =>
+          getVehicleIssueExample(vehicle, 'missing vehicle_scores and has zero common ownership repair scores', {
+            repair_score_count: repairScoreCountsByVehicleId.get(String(vehicle.id)) ?? 0,
+            common_repair_count: commonCountsByVehicleId.get(String(vehicle.id)) ?? 0,
+          }),
+        ),
+        limit,
+      ),
+      missingScoreGenericBaseVehicles: selectExampleRows(
+        missingScoreGenericBaseVehicles.map((vehicle) =>
+          getVehicleIssueExample(vehicle, 'generic/base vehicle row missing vehicle_scores', {
+            repair_score_count: repairScoreCountsByVehicleId.get(String(vehicle.id)) ?? 0,
+            common_repair_count: commonCountsByVehicleId.get(String(vehicle.id)) ?? 0,
+          }),
+        ),
+        limit,
+      ),
+      missingScoreEngineSpecificVehicles: selectExampleRows(
+        missingScoreEngineSpecificVehicles.map((vehicle) =>
+          getVehicleIssueExample(vehicle, 'engine-specific vehicle row missing vehicle_scores', {
+            repair_score_count: repairScoreCountsByVehicleId.get(String(vehicle.id)) ?? 0,
             common_repair_count: commonCountsByVehicleId.get(String(vehicle.id)) ?? 0,
           }),
         ),

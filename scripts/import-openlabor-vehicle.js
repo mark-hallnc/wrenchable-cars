@@ -350,6 +350,26 @@ async function insertRowsInChunks(tableName, rows, selectColumns = '*', chunkSiz
   return results;
 }
 
+async function upsertRowsInChunks(tableName, rows, onConflict, selectColumns = '*', chunkSize = 100) {
+  const results = [];
+
+  for (let index = 0; index < rows.length; index += chunkSize) {
+    const chunk = rows.slice(index, index + chunkSize);
+    const { data, error } = await supabase
+      .from(tableName)
+      .upsert(chunk, { onConflict })
+      .select(selectColumns);
+
+    if (error) {
+      throwSupabaseError(`Failed to upsert ${tableName} rows`, error);
+    }
+
+    results.push(...(data ?? []));
+  }
+
+  return results;
+}
+
 async function updateRowById(tableName, id, row, selectColumns = '*') {
   const { data, error } = await supabase.from(tableName).update(row).eq('id', id).select(selectColumns).single();
 
@@ -602,55 +622,12 @@ export async function importOpenLaborVehicle(options = {}) {
       .filter(Boolean);
 
     console.log('Syncing labor estimates...');
-    const existingLaborEstimates = await supabase
-      .from('labor_estimates')
-      .select('id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes')
-      .eq('vehicle_id', vehicleId)
-      .eq('source', 'openlabor');
-
-    if (existingLaborEstimates.error) {
-      throwSupabaseError('Failed to fetch existing labor estimates', existingLaborEstimates.error);
-    }
-
-    const laborEstimateByTaskId = new Map(
-      (existingLaborEstimates.data ?? []).map((estimate) => [estimate.repair_task_id, estimate]),
+    const laborEstimates = await upsertRowsInChunks(
+      'labor_estimates',
+      laborEstimateRows,
+      'vehicle_id,repair_task_id',
+      'id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes',
     );
-    const laborEstimates = [];
-    const newLaborEstimateRows = [];
-
-    for (const laborEstimateRow of laborEstimateRows) {
-      const existingEstimate = laborEstimateByTaskId.get(laborEstimateRow.repair_task_id);
-
-      if (!existingEstimate) {
-        newLaborEstimateRows.push(laborEstimateRow);
-        continue;
-      }
-
-      const updatedEstimate = rowMatches(existingEstimate, laborEstimateRow, [
-        'labor_hours',
-        'source_operation_name',
-        'source_notes',
-      ])
-        ? existingEstimate
-        : await updateRowById(
-            'labor_estimates',
-            existingEstimate.id,
-            laborEstimateRow,
-            'id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes',
-          );
-
-      laborEstimates.push(updatedEstimate);
-    }
-
-    if (newLaborEstimateRows.length > 0) {
-      const insertedLaborEstimates = await insertRowsInChunks(
-        'labor_estimates',
-        newLaborEstimateRows,
-        'id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes',
-      );
-
-      laborEstimates.push(...insertedLaborEstimates);
-    }
 
     const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining-Daily') ?? '';
 
