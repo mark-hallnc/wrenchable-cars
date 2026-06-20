@@ -10,6 +10,7 @@ import {
   vehicleScoreLabelFromScore,
 } from './lib/scoring.js';
 import { formatError, formatSupabaseError } from './lib/errors.js';
+import { COMMON_OWNERSHIP_REPAIR_SLUGS } from '../src/lib/commonRepairs.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -672,29 +673,6 @@ export async function importOpenLaborVehicle(options = {}) {
       laborEstimates.push(...insertedLaborEstimates);
     }
 
-    const targetJobs = [
-    'headlight-bulb',
-    'water-pump',
-    'alternator',
-    'starter',
-    'brake-pads-front',
-    'brake-pads-rear',
-    'battery',
-    'spark-plugs',
-    'ignition-coils-all',
-    'thermostat',
-    'radiator',
-    'serpentine-belt',
-    'serpentine-belt-tensioner',
-    'headlight-assembly',
-    'tail-light-bulb',
-    'wheel-bearing-front',
-    'strut-assembly-front',
-    'lower-control-arm-front',
-    'fuel-pump',
-    'blower-motor',
-  ];
-
     const fallbackMatches = new Map([
     ['headlight-bulb', ['headlight-bulb', 'headlamp-bulb']],
     ['brake-pads-front', ['brake-pads-front', 'front-brake-pads', 'brake-pads-and-rotors-front']],
@@ -706,7 +684,7 @@ export async function importOpenLaborVehicle(options = {}) {
 
     const repairScoreRows = [];
 
-    for (const targetJobSlug of targetJobs) {
+    for (const targetJobSlug of COMMON_OWNERSHIP_REPAIR_SLUGS) {
       const candidateSlugs = fallbackMatches.get(targetJobSlug) ?? [targetJobSlug];
       const match = findMatchingTargetJob(uniqueJobs, candidateSlugs);
 

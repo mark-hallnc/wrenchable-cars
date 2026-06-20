@@ -10,6 +10,7 @@ import {
   vehicleScoreLabelFromScore,
 } from './lib/scoring.js';
 import { formatError, formatSupabaseError } from './lib/errors.js';
+import { isCommonOwnershipRepairSlug } from '../src/lib/commonRepairs.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -34,30 +35,6 @@ const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
     detectSessionInUrl: false,
   },
 });
-
-const TARGET_OWNERSHIP_REPAIR_SLUGS = new Set([
-  'headlight-bulb',
-  'water-pump',
-  'alternator',
-  'starter',
-  'brake-pads-front',
-  'brake-pads-rear',
-  'battery',
-  'spark-plugs',
-  'ignition-coils-all',
-  'thermostat',
-  'radiator',
-  'serpentine-belt',
-  'serpentine-belt-tensioner',
-  'headlight-assembly',
-  'tail-light-bulb',
-  'wheel-bearing-front',
-  'strut-assembly-front',
-  'lower-control-arm-front',
-  'fuel-pump',
-  'blower-motor',
-]);
-const KNOWN_DIESEL_VEHICLE_ID = '32c8944f-276b-4922-ac3e-60f6cc6c12cd';
 
 function parseCliArgs(argv = process.argv.slice(2)) {
   const options = {};
@@ -212,25 +189,6 @@ async function deleteStaleVehicleScores(calculatedVehicleIds, validCommonScoresB
   return { deletedCount, deletedVehicleIds: staleVehicleIds };
 }
 
-function getWeightedAverage(scores, repairTasksById) {
-  let weightedTotal = 0;
-  let totalWeight = 0;
-
-  for (const score of scores) {
-    const task = repairTasksById.get(score.repair_task_id);
-    const weight = Number(task?.default_weight ?? 1.0);
-
-    weightedTotal += Number(score.wrenchability_score) * weight;
-    totalWeight += weight;
-  }
-
-  if (totalWeight === 0) {
-    return null;
-  }
-
-  return Number((weightedTotal / totalWeight).toFixed(2));
-}
-
 function getAverageScore(scores) {
   const validScores = scores
     .map((score) => Number(score.wrenchability_score))
@@ -360,7 +318,6 @@ export async function recalculateScores(options = {}) {
     laborEstimateCountByVehicleId.set(vehicleId, (laborEstimateCountByVehicleId.get(vehicleId) ?? 0) + 1);
   }
 
-  const repairTasksById = new Map(repairTasks.map((task) => [task.id, task]));
   const vehiclesById = new Map(vehicles.map((vehicle) => [String(vehicle.id), vehicle]));
 
   const timestamp = nowIso();
@@ -378,7 +335,7 @@ export async function recalculateScores(options = {}) {
 
     for (const estimate of sortedEstimates) {
       let percentile = null;
-      let wrenchabilityScore = null;
+      let wrenchabilityScore;
 
       if (useRelativeComparison) {
         const minHours = uniqueHours[0];
@@ -444,7 +401,7 @@ export async function recalculateScores(options = {}) {
   }
 
   const targetRepairTaskIds = new Set(
-    repairTasks.filter((task) => TARGET_OWNERSHIP_REPAIR_SLUGS.has(task.source_job_slug)).map((task) => task.id),
+    repairTasks.filter((task) => isCommonOwnershipRepairSlug(task.source_job_slug)).map((task) => task.id),
   );
   const vehicleScoreRows = [];
 
@@ -530,13 +487,6 @@ export async function recalculateScores(options = {}) {
         };
       })()
     : null;
-
-  const knownDieselCommonScores = validCommonScoresByVehicleId.get(KNOWN_DIESEL_VEHICLE_ID) ?? [];
-  if (vehiclesById.has(KNOWN_DIESEL_VEHICLE_ID) && knownDieselCommonScores.length > 0 && !vehicleScoreVehicleIdsAfterRun.has(KNOWN_DIESEL_VEHICLE_ID)) {
-    throw new Error(
-      `Known diesel vehicle ${KNOWN_DIESEL_VEHICLE_ID} has ${knownDieselCommonScores.length} valid common repair scores but no vehicle_scores row after recalculation.`,
-    );
-  }
 
   const summary = {
     totalLaborEstimatesProcessed: laborEstimates.length,

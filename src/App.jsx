@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabaseClient'
+import {
+  COMMON_OWNERSHIP_REPAIR_COUNT,
+  COMMON_OWNERSHIP_REPAIR_NAME_KEYWORDS,
+  COMMON_OWNERSHIP_REPAIR_SLUGS,
+  getCommonRepairCoverage,
+  isCommonOwnershipRepairSlug,
+} from './lib/commonRepairs'
 import './App.css'
 
 const BRAND = {
@@ -41,54 +48,6 @@ const formatScore = (score) => {
 
   return numericScore.toFixed(1).replace('.0', '')
 }
-
-const TOP_OWNERSHIP_REPAIR_SLUGS = [
-  'headlight-bulb',
-  'water-pump',
-  'alternator',
-  'starter',
-  'brake-pads-front',
-  'brake-pads-rear',
-  'battery',
-  'spark-plugs',
-  'ignition-coils-all',
-  'thermostat',
-  'radiator',
-  'serpentine-belt',
-  'serpentine-belt-tensioner',
-  'headlight-assembly',
-  'tail-light-bulb',
-  'wheel-bearing-front',
-  'strut-assembly-front',
-  'lower-control-arm-front',
-  'fuel-pump',
-  'blower-motor',
-]
-
-const COMMON_OWNERSHIP_REPAIR_COUNT = TOP_OWNERSHIP_REPAIR_SLUGS.length
-
-const TOP_OWNERSHIP_REPAIR_NAME_KEYWORDS = [
-  { slug: 'headlight-bulb', keywords: ['headlight', 'bulb'] },
-  { slug: 'water-pump', keywords: ['water pump'] },
-  { slug: 'alternator', keywords: ['alternator'] },
-  { slug: 'starter', keywords: ['starter'] },
-  { slug: 'brake-pads-front', keywords: ['front', 'brake'] },
-  { slug: 'brake-pads-rear', keywords: ['rear', 'brake'] },
-  { slug: 'battery', keywords: ['battery'] },
-  { slug: 'spark-plugs', keywords: ['spark plug'] },
-  { slug: 'ignition-coils-all', keywords: ['ignition coil'] },
-  { slug: 'thermostat', keywords: ['thermostat'] },
-  { slug: 'radiator', keywords: ['radiator'] },
-  { slug: 'serpentine-belt', keywords: ['serpentine belt'] },
-  { slug: 'serpentine-belt-tensioner', keywords: ['belt tensioner'] },
-  { slug: 'headlight-assembly', keywords: ['headlight', 'assembly'] },
-  { slug: 'tail-light-bulb', keywords: ['tail light', 'bulb'] },
-  { slug: 'wheel-bearing-front', keywords: ['front', 'wheel bearing'] },
-  { slug: 'strut-assembly-front', keywords: ['front', 'strut'] },
-  { slug: 'lower-control-arm-front', keywords: ['front', 'lower control arm'] },
-  { slug: 'fuel-pump', keywords: ['fuel pump'] },
-  { slug: 'blower-motor', keywords: ['blower motor'] },
-]
 
 const REPAIR_VIEW_FILTERS = [
   { value: 'top-ownership', label: 'Common Ownership Repairs' },
@@ -325,17 +284,17 @@ const getRepairDisplayOrder = (repair) => {
 
 const getTopOwnershipOrder = (repair) => {
   const slug = normalizeText(getRepairSlug(repair))
-  const slugIndex = TOP_OWNERSHIP_REPAIR_SLUGS.indexOf(slug)
+  const slugIndex = COMMON_OWNERSHIP_REPAIR_SLUGS.indexOf(slug)
 
   if (slugIndex >= 0) return slugIndex
 
   const repairName = normalizeText(getRepairName(repair))
-  const keywordMatch = TOP_OWNERSHIP_REPAIR_NAME_KEYWORDS.find(({ keywords }) =>
+  const keywordMatch = COMMON_OWNERSHIP_REPAIR_NAME_KEYWORDS.find(({ keywords }) =>
     keywords.every((keyword) => repairName.includes(keyword)),
   )
 
   return keywordMatch
-    ? TOP_OWNERSHIP_REPAIR_SLUGS.indexOf(keywordMatch.slug)
+    ? COMMON_OWNERSHIP_REPAIR_SLUGS.indexOf(keywordMatch.slug)
     : Number.POSITIVE_INFINITY
 }
 
@@ -787,15 +746,6 @@ const getRepairCategorySummary = (repairs) => {
 const getCoverageLabelClass = (coverageLabel) =>
   normalizeText(coverageLabel).replace(/\s+/g, '-')
 
-function getCommonRepairCoverage(commonRepairCount) {
-  const count = Number(commonRepairCount)
-
-  if (count >= 16) return 'Strong coverage'
-  if (count >= 10) return 'Good coverage'
-  if (count >= 5) return 'Limited coverage'
-  return 'Early estimate'
-}
-
 const getCommonRepairCoverageDescription = (commonRepairCount) => {
   const count = Number(commonRepairCount)
 
@@ -924,7 +874,7 @@ const getRepairCountMaps = async () => {
 
     counts.repairCount += 1
 
-    if (TOP_OWNERSHIP_REPAIR_SLUGS.includes(slug)) {
+    if (isCommonOwnershipRepairSlug(slug)) {
       counts.commonRepairCount += 1
     } else {
       counts.additionalRepairCount += 1
