@@ -57,6 +57,23 @@ const TARGET_OWNERSHIP_REPAIR_SLUGS = new Set([
   'fuel-pump',
   'blower-motor',
 ]);
+const KNOWN_DIESEL_VEHICLE_ID = '32c8944f-276b-4922-ac3e-60f6cc6c12cd';
+
+function parseCliArgs(argv = process.argv.slice(2)) {
+  const options = {};
+
+  for (const arg of argv) {
+    if (!arg.startsWith('--')) continue;
+
+    const separatorIndex = arg.indexOf('=');
+    const key = arg.slice(2, separatorIndex > -1 ? separatorIndex : undefined);
+    const value = separatorIndex > -1 ? arg.slice(separatorIndex + 1) : 'true';
+
+    if (key) options[key] = value;
+  }
+
+  return options;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -156,6 +173,45 @@ async function upsertRowsInChunks(tableName, rows, onConflict, selectColumns, ch
   return upsertedCount;
 }
 
+async function deleteStaleVehicleScores(calculatedVehicleIds, validCommonScoresByVehicleId) {
+  const existingRows = await selectAllRows('vehicle_scores', 'id, vehicle_id');
+  const keepVehicleIds = new Set(calculatedVehicleIds);
+  const staleIds = existingRows
+    .filter((row) => {
+      const vehicleId = String(row.vehicle_id);
+
+      return !keepVehicleIds.has(vehicleId) && (validCommonScoresByVehicleId.get(vehicleId)?.length ?? 0) === 0;
+    })
+    .map((row) => row.id);
+  const staleVehicleIds = new Set(
+    existingRows
+      .filter((row) => {
+        const vehicleId = String(row.vehicle_id);
+
+        return !keepVehicleIds.has(vehicleId) && (validCommonScoresByVehicleId.get(vehicleId)?.length ?? 0) === 0;
+      })
+      .map((row) => String(row.vehicle_id)),
+  );
+  let deletedCount = 0;
+
+  for (let index = 0; index < staleIds.length; index += 100) {
+    const chunk = staleIds.slice(index, index + 100);
+    const { data, error } = await supabase
+      .from('vehicle_scores')
+      .delete()
+      .in('id', chunk)
+      .select('id');
+
+    if (error) {
+      throw new Error(`Failed to delete stale vehicle_scores: ${formatSupabaseError(error)}`);
+    }
+
+    deletedCount += data?.length ?? 0;
+  }
+
+  return { deletedCount, deletedVehicleIds: staleVehicleIds };
+}
+
 function getWeightedAverage(scores, repairTasksById) {
   let weightedTotal = 0;
   let totalWeight = 0;
@@ -173,6 +229,16 @@ function getWeightedAverage(scores, repairTasksById) {
   }
 
   return Number((weightedTotal / totalWeight).toFixed(2));
+}
+
+function getAverageScore(scores) {
+  const validScores = scores
+    .map((score) => Number(score.wrenchability_score))
+    .filter(Number.isFinite);
+
+  if (validScores.length === 0) return null;
+
+  return Number((validScores.reduce((total, score) => total + score, 0) / validScores.length).toFixed(2));
 }
 
 function hasValidNumber(value) {
@@ -234,8 +300,37 @@ function chooseVehicleScoreWinner(existingRow, nextRow) {
   return nextRow;
 }
 
+function buildVehicleLabel(vehicle) {
+  return [
+    vehicle?.year,
+    vehicle?.make,
+    vehicle?.model,
+    vehicle?.engine,
+    vehicle?.source_engine_slug ? `(${vehicle.source_engine_slug})` : '',
+  ].filter(Boolean).join(' ');
+}
+
+function printVehicleDebug(debugInfo) {
+  if (!debugInfo) return;
+
+  console.log('debug vehicle recalculation');
+  console.log(`vehicle id: ${debugInfo.vehicleId}`);
+  console.log(`vehicle: ${buildVehicleLabel(debugInfo.vehicle) || 'not found'}`);
+  console.log(`source_engine_slug: ${debugInfo.vehicle?.source_engine_slug ?? 'none'}`);
+  console.log(`total labor estimates found: ${debugInfo.totalLaborEstimatesFound}`);
+  console.log(`total repair_scores found: ${debugInfo.totalRepairScoresFound}`);
+  console.log(`common repair scores found: ${debugInfo.commonRepairScoresFound}`);
+  console.log(`valid common repair scores used: ${debugInfo.validCommonRepairScoresUsed}`);
+  console.log(`calculated overall_score: ${debugInfo.overallScore ?? 'none'}`);
+  console.log(`calculated score_label: ${debugInfo.scoreLabel ?? 'none'}`);
+  console.log(`vehicle_scores row prepared: ${debugInfo.rowPrepared ? 'yes' : 'no'}`);
+  console.log(`vehicle_scores row upserted: ${debugInfo.rowUpserted ? 'yes' : 'no'}`);
+  console.log(`considered stale/deleted: ${debugInfo.staleDeleted ? 'yes' : 'no'}`);
+}
+
 export async function recalculateScores(options = {}) {
   const log = options.log ?? true;
+  const debugVehicleId = options.vehicleId ? String(options.vehicleId) : '';
   const [laborEstimates, repairTasks, vehicles] = await Promise.all([
     selectAllRows(
       'labor_estimates',
@@ -247,10 +342,11 @@ export async function recalculateScores(options = {}) {
       ],
     ),
     selectAllRows('repair_tasks', 'id, name, category, source_job_slug, default_weight'),
-    selectAllRows('vehicles', 'id, year, make, model, engine'),
+    selectAllRows('vehicles', 'id, year, make, model, engine, source_engine_slug'),
   ]);
 
   const laborEstimatesByRepairTask = new Map();
+  const laborEstimateCountByVehicleId = new Map();
 
   for (const laborEstimate of laborEstimates) {
     const key = laborEstimate.repair_task_id;
@@ -260,9 +356,12 @@ export async function recalculateScores(options = {}) {
     }
 
     laborEstimatesByRepairTask.get(key).push(laborEstimate);
+    const vehicleId = String(laborEstimate.vehicle_id);
+    laborEstimateCountByVehicleId.set(vehicleId, (laborEstimateCountByVehicleId.get(vehicleId) ?? 0) + 1);
   }
 
   const repairTasksById = new Map(repairTasks.map((task) => [task.id, task]));
+  const vehiclesById = new Map(vehicles.map((vehicle) => [String(vehicle.id), vehicle]));
 
   const timestamp = nowIso();
   const repairScoreRows = [];
@@ -332,38 +431,37 @@ export async function recalculateScores(options = {}) {
   );
 
   const repairScoresByVehicleId = new Map();
+  const validCommonScoresByVehicleId = new Map();
 
   for (const row of dedupedRepairScores.rows) {
-    if (!repairScoresByVehicleId.has(row.vehicle_id)) {
-      repairScoresByVehicleId.set(row.vehicle_id, []);
+    const vehicleId = String(row.vehicle_id);
+
+    if (!repairScoresByVehicleId.has(vehicleId)) {
+      repairScoresByVehicleId.set(vehicleId, []);
     }
 
-    repairScoresByVehicleId.get(row.vehicle_id).push(row);
+    repairScoresByVehicleId.get(vehicleId).push(row);
   }
 
   const targetRepairTaskIds = new Set(
     repairTasks.filter((task) => TARGET_OWNERSHIP_REPAIR_SLUGS.has(task.source_job_slug)).map((task) => task.id),
   );
-
   const vehicleScoreRows = [];
 
-  for (const vehicle of vehicles) {
-    const vehicleScores = repairScoresByVehicleId.get(vehicle.id) ?? [];
+  for (const [vehicleId, vehicleScores] of repairScoresByVehicleId.entries()) {
+    const selectedScores = vehicleScores.filter((score) =>
+      targetRepairTaskIds.has(score.repair_task_id) && Number.isFinite(Number(score.wrenchability_score)),
+    );
+    validCommonScoresByVehicleId.set(vehicleId, selectedScores);
 
-    if (vehicleScores.length === 0) {
-      continue;
-    }
-
-    const targetRepairScores = vehicleScores.filter((score) => targetRepairTaskIds.has(score.repair_task_id));
-    const selectedScores = targetRepairScores.length > 0 ? targetRepairScores : vehicleScores;
-    const overallScore = getWeightedAverage(selectedScores, repairTasksById);
+    const overallScore = getAverageScore(selectedScores);
 
     if (overallScore === null) {
       continue;
     }
 
     vehicleScoreRows.push({
-      vehicle_id: vehicle.id,
+      vehicle_id: vehicleId,
       overall_score: overallScore,
       score_label: vehicleScoreLabelFromScore(overallScore),
       verdict: buildVehicleVerdict(),
@@ -387,12 +485,66 @@ export async function recalculateScores(options = {}) {
     'vehicle_id',
     'id, vehicle_id, overall_score, score_label, verdict, calculated_at',
   );
+  const calculatedVehicleIds = new Set(dedupedVehicleScores.rows.map((row) => String(row.vehicle_id)));
+  const staleVehicleScoreDeleteResult = await deleteStaleVehicleScores(
+    calculatedVehicleIds,
+    validCommonScoresByVehicleId,
+  );
+  const staleVehicleScoresDeleted = staleVehicleScoreDeleteResult.deletedCount;
+  const vehicleScoresAfterRun = await selectAllRows('vehicle_scores', 'id, vehicle_id, overall_score, score_label');
+  const vehicleScoreVehicleIdsAfterRun = new Set(vehicleScoresAfterRun.map((score) => String(score.vehicle_id)));
+  const missingScoreExamples = [];
+
+  for (const [vehicleId, repairRows] of repairScoresByVehicleId.entries()) {
+    if (vehicleScoreVehicleIdsAfterRun.has(vehicleId)) continue;
+
+    const commonRepairCount = (validCommonScoresByVehicleId.get(vehicleId) ?? []).length;
+    if (repairRows.length === 0) continue;
+
+    const vehicle = vehiclesById.get(vehicleId);
+    missingScoreExamples.push({
+      vehicle,
+      repairScoreCount: repairRows.length,
+      commonRepairCount,
+    });
+  }
+
+  const debugInfo = debugVehicleId
+    ? (() => {
+        const vehicleScores = repairScoresByVehicleId.get(debugVehicleId) ?? [];
+        const validCommonScores = validCommonScoresByVehicleId.get(debugVehicleId) ?? [];
+        const scoreRow = dedupedVehicleScores.rows.find((row) => String(row.vehicle_id) === debugVehicleId);
+
+        return {
+          vehicleId: debugVehicleId,
+          vehicle: vehiclesById.get(debugVehicleId),
+          totalLaborEstimatesFound: laborEstimateCountByVehicleId.get(debugVehicleId) ?? 0,
+          totalRepairScoresFound: vehicleScores.length,
+          commonRepairScoresFound: vehicleScores.filter((score) => targetRepairTaskIds.has(score.repair_task_id)).length,
+          validCommonRepairScoresUsed: validCommonScores.length,
+          overallScore: scoreRow?.overall_score ?? null,
+          scoreLabel: scoreRow?.score_label ?? null,
+          rowPrepared: Boolean(scoreRow),
+          rowUpserted: vehicleScoreVehicleIdsAfterRun.has(debugVehicleId),
+          staleDeleted: staleVehicleScoreDeleteResult.deletedVehicleIds.has(debugVehicleId),
+        };
+      })()
+    : null;
+
+  const knownDieselCommonScores = validCommonScoresByVehicleId.get(KNOWN_DIESEL_VEHICLE_ID) ?? [];
+  if (vehiclesById.has(KNOWN_DIESEL_VEHICLE_ID) && knownDieselCommonScores.length > 0 && !vehicleScoreVehicleIdsAfterRun.has(KNOWN_DIESEL_VEHICLE_ID)) {
+    throw new Error(
+      `Known diesel vehicle ${KNOWN_DIESEL_VEHICLE_ID} has ${knownDieselCommonScores.length} valid common repair scores but no vehicle_scores row after recalculation.`,
+    );
+  }
 
   const summary = {
     totalLaborEstimatesProcessed: laborEstimates.length,
     totalRepairTasksScored: repairTaskIdsScored.size,
     repairScoresUpserted,
     vehicleScoresRecalculated,
+    staleVehicleScoresDeleted,
+    vehiclesWithRepairScoresMissingVehicleScores: missingScoreExamples.length,
     relativeComparisonScores: relativeComparisonCount,
     fallbackBucketScores: fallbackBucketCount,
   };
@@ -402,6 +554,18 @@ export async function recalculateScores(options = {}) {
     console.log(`total repair tasks scored: ${summary.totalRepairTasksScored}`);
     console.log(`total repair_scores upserted: ${summary.repairScoresUpserted}`);
     console.log(`total vehicle_scores recalculated: ${summary.vehicleScoresRecalculated}`);
+    console.log(`stale vehicle_scores deleted: ${summary.staleVehicleScoresDeleted}`);
+    console.log(`Vehicles with repair_scores but missing vehicle_scores: ${summary.vehiclesWithRepairScoresMissingVehicleScores}`);
+    if (missingScoreExamples.length > 0) {
+      console.log('missing vehicle_scores examples:');
+      for (const example of missingScoreExamples.slice(0, 10)) {
+        const vehicle = example.vehicle;
+        console.log(
+          `- ${vehicle?.year ?? 'unknown'} ${vehicle?.make ?? 'unknown'} ${vehicle?.model ?? 'unknown'} ${vehicle?.engine ?? 'Base / unspecified engine'} ${vehicle?.source_engine_slug ?? 'no source_engine_slug'}; repair_score_count: ${example.repairScoreCount}; common_repair_count: ${example.commonRepairCount}`,
+        );
+      }
+    }
+    printVehicleDebug(debugInfo);
     console.log(`relative comparison scores: ${summary.relativeComparisonScores}`);
     console.log(`fallback bucket scores: ${summary.fallbackBucketScores}`);
   }
@@ -413,7 +577,7 @@ const isDirectExecution = process.argv[1]
   && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isDirectExecution) {
-  recalculateScores().catch((error) => {
+  recalculateScores(parseCliArgs()).catch((error) => {
     console.error('Recalculation failed:');
     console.error(formatError(error));
     process.exitCode = 1;

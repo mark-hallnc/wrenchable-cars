@@ -65,6 +65,8 @@ const TOP_OWNERSHIP_REPAIR_SLUGS = [
   'blower-motor',
 ]
 
+const COMMON_OWNERSHIP_REPAIR_COUNT = TOP_OWNERSHIP_REPAIR_SLUGS.length
+
 const TOP_OWNERSHIP_REPAIR_NAME_KEYWORDS = [
   { slug: 'headlight-bulb', keywords: ['headlight', 'bulb'] },
   { slug: 'water-pump', keywords: ['water pump'] },
@@ -89,10 +91,10 @@ const TOP_OWNERSHIP_REPAIR_NAME_KEYWORDS = [
 ]
 
 const REPAIR_VIEW_FILTERS = [
-  { value: 'top-ownership', label: 'Top ownership repairs' },
+  { value: 'top-ownership', label: 'Common Ownership Repairs' },
   { value: 'easiest', label: 'Easiest repairs' },
   { value: 'hardest', label: 'Hardest repairs' },
-  { value: 'all', label: 'All repairs' },
+  { value: 'all', label: 'Additional repair data' },
 ]
 
 const REPAIR_SORT_MODES = [
@@ -117,9 +119,9 @@ const QUEUE_STATUSES = ['pending', 'running', 'completed', 'skipped', 'failed']
 const COMPARE_STORAGE_KEY = 'wrenchable_compare_vehicle_ids'
 
 const COMPARE_REPAIR_VIEWS = [
-  { value: 'top-ownership', label: 'Top Ownership Repairs' },
-  { value: 'shared', label: 'All Shared Repairs' },
-  { value: 'differences', label: 'Biggest Differences' },
+  { value: 'top-ownership', label: 'Common Ownership Repairs' },
+  { value: 'shared', label: 'Shared Additional Repairs' },
+  { value: 'differences', label: 'Biggest Common Differences' },
 ]
 
 const COMPARE_REPAIR_SORTS = [
@@ -597,6 +599,17 @@ const formatHours = (hours) => {
   return `${numericHours.toFixed(1)} ${numericHours === 1 ? 'hr' : 'hrs'}`
 }
 
+const buildRepairLaborExplanation = (hours) => {
+  const numericHours = Number(hours)
+
+  if (!Number.isFinite(numericHours)) return 'Labor time estimate is not available.'
+  if (numericHours <= 0.5) return 'A quick repair based on estimated labor time.'
+  if (numericHours <= 1.5) return 'A relatively approachable repair based on estimated labor time.'
+  if (numericHours <= 3) return 'A moderate repair based on estimated labor time.'
+  if (numericHours <= 6) return 'A more involved repair based on estimated labor time.'
+  return 'A major repair based on estimated labor time.'
+}
+
 const getScoreBasedSummary = (overallScore) => {
   const score = Number(overallScore)
 
@@ -620,7 +633,8 @@ const getScoreBasedSummary = (overallScore) => {
 }
 
 const buildVehicleScoreSummary = (vehicle, repairScores) => {
-  const usableRepairs = (repairScores ?? [])
+  const commonRepairs = (repairScores ?? []).filter(isTopOwnershipRepair)
+  const usableRepairs = commonRepairs
     .map((repair) => ({
       repair,
       score: getRepairScore(repair),
@@ -629,7 +643,7 @@ const buildVehicleScoreSummary = (vehicle, repairScores) => {
     .filter(({ score, hours }) => Number.isFinite(score) || Number.isFinite(hours))
 
   if (usableRepairs.length === 0) {
-    return 'More repair data is needed to explain this score.'
+    return 'More common ownership repair data is needed to explain this score.'
   }
 
   const coverageInfo = getVehicleCoverageInfo(repairScores)
@@ -683,7 +697,7 @@ const buildVehicleScoreSummary = (vehicle, repairScores) => {
 }
 
 const getVehicleQuickTake = (repairs) => {
-  const repairRows = (repairs ?? [])
+  const repairRows = (repairs ?? []).filter(isTopOwnershipRepair)
     .map((repair) => ({
       repair,
       score: getRepairScore(repair),
@@ -773,6 +787,33 @@ const getRepairCategorySummary = (repairs) => {
 const getCoverageLabelClass = (coverageLabel) =>
   normalizeText(coverageLabel).replace(/\s+/g, '-')
 
+function getCommonRepairCoverage(commonRepairCount) {
+  const count = Number(commonRepairCount)
+
+  if (count >= 16) return 'Strong coverage'
+  if (count >= 10) return 'Good coverage'
+  if (count >= 5) return 'Limited coverage'
+  return 'Early estimate'
+}
+
+const getCommonRepairCoverageDescription = (commonRepairCount) => {
+  const count = Number(commonRepairCount)
+
+  if (count >= 16) {
+    return `Score based on ${count} of ${COMMON_OWNERSHIP_REPAIR_COUNT} common ownership repairs.`
+  }
+
+  if (count >= 10) {
+    return `Score based on ${count} of ${COMMON_OWNERSHIP_REPAIR_COUNT} common ownership repairs.`
+  }
+
+  if (count >= 5) {
+    return `Score based on ${count} of ${COMMON_OWNERSHIP_REPAIR_COUNT} common ownership repairs.`
+  }
+
+  return `Early estimate based on ${Math.max(0, count)} of ${COMMON_OWNERSHIP_REPAIR_COUNT} common ownership repairs.`
+}
+
 const getVehicleCoverageInfo = (repairScores) => {
   const repairs = repairScores ?? []
   const scoredRepairCount = repairs.filter((repair) =>
@@ -782,51 +823,25 @@ const getVehicleCoverageInfo = (repairScores) => {
     Number.isFinite(getRepairScore(repair)) && isTopOwnershipRepair(repair),
   ).length
 
-  if (topOwnershipRepairCount >= 16) {
-    return {
-      scoredRepairCount,
-      topOwnershipRepairCount,
-      coverageLabel: 'Strong coverage',
-      coverageDescription: 'This score is backed by many common repair ratings.',
-    }
-  }
-
-  if (topOwnershipRepairCount >= 10) {
-    return {
-      scoredRepairCount,
-      topOwnershipRepairCount,
-      coverageLabel: 'Good coverage',
-      coverageDescription: 'This score is backed by several common repair ratings.',
-    }
-  }
-
-  if (topOwnershipRepairCount >= 5) {
-    return {
-      scoredRepairCount,
-      topOwnershipRepairCount,
-      coverageLabel: 'Limited coverage',
-      coverageDescription: 'This score is based on a smaller set of repair ratings.',
-    }
-  }
-
   return {
     scoredRepairCount,
     topOwnershipRepairCount,
-    coverageLabel: 'Early estimate',
-    coverageDescription: 'More repair ratings are needed for a stronger score.',
+    additionalRepairCount: Math.max(0, scoredRepairCount - topOwnershipRepairCount),
+    coverageLabel: getCommonRepairCoverage(topOwnershipRepairCount),
+    coverageDescription: getCommonRepairCoverageDescription(topOwnershipRepairCount),
   }
 }
 
 const getCoverageInfoFromRepairCount = (repairCount) => {
   const count = Number(repairCount)
 
-  if (!Number.isFinite(count) || count <= 0) return null
+  if (!Number.isFinite(count)) return null
 
-  if (count >= 16) return { coverageLabel: 'Strong coverage', scoredRepairCount: count }
-  if (count >= 10) return { coverageLabel: 'Good coverage', scoredRepairCount: count }
-  if (count >= 5) return { coverageLabel: 'Limited coverage', scoredRepairCount: count }
-
-  return { coverageLabel: 'Early estimate', scoredRepairCount: count }
+  return {
+    coverageLabel: getCommonRepairCoverage(count),
+    scoredRepairCount: count,
+    coverageDescription: getCommonRepairCoverageDescription(count),
+  }
 }
 
 const getJoinedVehicle = (scoreRow) => {
@@ -889,6 +904,47 @@ const mergeVehicleScoreRows = (scoreRows, vehicleRows) => {
       }
     })
 }
+
+const getRepairCountMaps = async () => {
+  const [repairRows, repairTasks] = await Promise.all([
+    selectAllRows('repair_scores', 'vehicle_id, repair_task_id'),
+    selectAllRows('repair_tasks', 'id, source_job_slug'),
+  ])
+  const taskSlugsById = new Map(repairTasks.map((task) => [task.id, task.source_job_slug]))
+  const countsByVehicleId = new Map()
+
+  for (const repair of repairRows) {
+    const vehicleId = String(repair.vehicle_id)
+    const counts = countsByVehicleId.get(vehicleId) ?? {
+      commonRepairCount: 0,
+      additionalRepairCount: 0,
+      repairCount: 0,
+    }
+    const slug = taskSlugsById.get(repair.repair_task_id)
+
+    counts.repairCount += 1
+
+    if (TOP_OWNERSHIP_REPAIR_SLUGS.includes(slug)) {
+      counts.commonRepairCount += 1
+    } else {
+      counts.additionalRepairCount += 1
+    }
+
+    countsByVehicleId.set(vehicleId, counts)
+  }
+
+  return countsByVehicleId
+}
+
+const applyRepairCountsToVehicles = (vehicles, countsByVehicleId) =>
+  vehicles.map((vehicle) => ({
+    ...vehicle,
+    ...(countsByVehicleId.get(String(vehicle.id)) ?? {
+      commonRepairCount: 0,
+      additionalRepairCount: 0,
+      repairCount: 0,
+    }),
+  }))
 
 const getRankedVehicles = (vehicles, filters) => {
   const normalizedSearch = normalizeText(filters.searchText)
@@ -1157,10 +1213,10 @@ const getCompareRepairRows = (comparisonVehicles, viewMode, sortMode) => {
     }
 
     if (viewMode === 'shared') {
-      return row.dataCount >= 2
+      return row.dataCount >= 2 && !Number.isFinite(row.order)
     }
 
-    return row.hoursCount >= 2 && row.laborSpread > 0
+    return Number.isFinite(row.order) && row.hoursCount >= 2 && row.laborSpread > 0
   })
 
   const sortRows = (first, second) => {
@@ -1459,7 +1515,7 @@ function App() {
   const [vehicleOptionsStatus, setVehicleOptionsStatus] = useState('loading')
   const [status, setStatus] = useState('idle')
   const [result, setResult] = useState(null)
-  const [repairViewFilter, setRepairViewFilter] = useState('top-ownership')
+  const [repairViewFilter, setRepairViewFilter] = useState('all')
   const [repairSortMode, setRepairSortMode] = useState('recommended')
   const [repairSearchText, setRepairSearchText] = useState('')
   const [rankingType, setRankingType] = useState('top')
@@ -1615,17 +1671,15 @@ function App() {
           if (vehiclesResponse.error) throw vehiclesResponse.error
 
           const ranked = mergeVehicleScoreRows(scoresResponse.data, vehiclesResponse.data)
-          // Do not load all repair_scores here; the table can be large.
-          // Rankings use vehicle_scores as the source of truth and omit repair counts.
-          setRankedVehicles(ranked)
+          const repairCountMaps = await getRepairCountMaps()
+          setRankedVehicles(applyRepairCountsToVehicles(ranked, repairCountMaps))
           setRankingsStatus('loaded')
           return
         }
 
         const ranked = mapVehicleScoreRows(data)
-        // Do not load all repair_scores here; the table can be large.
-        // Rankings use vehicle_scores as the source of truth and omit repair counts.
-        setRankedVehicles(ranked)
+        const repairCountMaps = await getRepairCountMaps()
+        setRankedVehicles(applyRepairCountsToVehicles(ranked, repairCountMaps))
         setRankingsStatus('loaded')
       } catch (error) {
         console.error('Error loading vehicle rankings:', error)
@@ -1778,7 +1832,7 @@ function App() {
   }
 
   const resetRepairControls = () => {
-    setRepairViewFilter('top-ownership')
+    setRepairViewFilter('all')
     setRepairSortMode('recommended')
     setRepairSearchText('')
   }
@@ -2379,15 +2433,30 @@ function App() {
     rankingSearchText ||
     rankingMinScore ||
     rankingMaxScore
+  const commonOwnershipRepairs = useMemo(
+    () =>
+      (result?.repairs ?? [])
+        .filter(isTopOwnershipRepair)
+        .sort(
+          (first, second) =>
+            compareNumbers(getTopOwnershipOrder(first), getTopOwnershipOrder(second)) ||
+            compareRepairNames(first, second),
+        ),
+    [result?.repairs],
+  )
+  const additionalRepairs = useMemo(
+    () => (result?.repairs ?? []).filter((repair) => !isTopOwnershipRepair(repair)),
+    [result?.repairs],
+  )
   const visibleRepairs = useMemo(
     () =>
       getFilteredAndSortedRepairs(
-        result?.repairs ?? [],
-        repairViewFilter,
+        additionalRepairs,
+        repairViewFilter === 'top-ownership' ? 'all' : repairViewFilter,
         repairSortMode,
         repairSearchText,
       ),
-    [result?.repairs, repairViewFilter, repairSortMode, repairSearchText],
+    [additionalRepairs, repairViewFilter, repairSortMode, repairSearchText],
   )
   const vehicleQuickTake = useMemo(
     () => getVehicleQuickTake(result?.repairs ?? []),
@@ -2404,19 +2473,15 @@ function App() {
   const repairSummaryText = useMemo(() => {
     const count = visibleRepairs.length
 
-    if (repairViewFilter === 'top-ownership') {
-      return `Showing ${count} top ownership ${count === 1 ? 'repair' : 'repairs'}`
-    }
-
     if (repairViewFilter === 'easiest') {
-      return `Showing ${count} easiest ${count === 1 ? 'repair' : 'repairs'}`
+      return `Showing ${count} easiest additional ${count === 1 ? 'repair' : 'repairs'}`
     }
 
     if (repairViewFilter === 'hardest') {
-      return `Showing ${count} hardest ${count === 1 ? 'repair' : 'repairs'}`
+      return `Showing ${count} hardest additional ${count === 1 ? 'repair' : 'repairs'}`
     }
 
-    return `Showing ${count} ${count === 1 ? 'repair' : 'repairs'}`
+    return `Showing ${count} additional ${count === 1 ? 'repair' : 'repairs'}`
   }, [repairViewFilter, visibleRepairs.length])
   const selectedCompareIds = useMemo(
     () => [...new Set(compareSlots.map((slot) => slot.vehicleId).filter(Boolean))],
@@ -2447,6 +2512,10 @@ function App() {
     () => buildCompareHighlights(comparisonVehicles),
     [comparisonVehicles],
   )
+  const otherCompareRepairRows = useMemo(
+    () => getCompareRepairRows(comparisonVehicles, 'shared', compareRepairSort),
+    [comparisonVehicles, compareRepairSort],
+  )
   const compareRepairSummaryText = useMemo(() => {
     const vehicleCount = comparisonVehicles.length
 
@@ -2454,7 +2523,11 @@ function App() {
       return `Showing ${compareRepairRows.length} common ownership repairs.`
     }
 
-    return `Comparing ${compareRepairRows.length} shared ${compareRepairRows.length === 1 ? 'repair' : 'repairs'} across ${vehicleCount} ${vehicleCount === 1 ? 'vehicle' : 'vehicles'}.`
+    if (compareRepairView === 'differences') {
+      return `Showing ${compareRepairRows.length} biggest differences from common ownership repairs.`
+    }
+
+    return `Comparing ${compareRepairRows.length} shared additional ${compareRepairRows.length === 1 ? 'repair' : 'repairs'} across ${vehicleCount} ${vehicleCount === 1 ? 'vehicle' : 'vehicles'} as reference data.`
   }, [compareRepairRows.length, compareRepairView, comparisonVehicles.length])
   const bestOverallText = useMemo(
     () => getBestOverallText(comparisonVehicles),
@@ -3143,18 +3216,21 @@ function App() {
                       {vehicle.vehicleScore?.score_label && (
                         <em>{vehicle.vehicleScore.score_label}</em>
                       )}
-                      {vehicle.repairCount > 0 && (
+                      {Number.isFinite(Number(vehicle.commonRepairCount)) && (
                         <>
-                          {getCoverageInfoFromRepairCount(vehicle.repairCount) && (
+                          {getCoverageInfoFromRepairCount(vehicle.commonRepairCount) && (
                             <span
                               className={`coverage-badge ${getCoverageLabelClass(
-                                getCoverageInfoFromRepairCount(vehicle.repairCount).coverageLabel,
+                                getCoverageInfoFromRepairCount(vehicle.commonRepairCount).coverageLabel,
                               )}`}
                             >
-                              {getCoverageInfoFromRepairCount(vehicle.repairCount).coverageLabel}
+                              {getCoverageInfoFromRepairCount(vehicle.commonRepairCount).coverageLabel}
                             </span>
                           )}
-                          <span>{vehicle.repairCount} repair scores</span>
+                          <span>
+                            Score based on {vehicle.commonRepairCount} of {COMMON_OWNERSHIP_REPAIR_COUNT} common ownership repairs
+                          </span>
+                          <span>Additional repair data: {vehicle.additionalRepairCount ?? 0} jobs</span>
                         </>
                       )}
                       <button type="button" onClick={() => handleRankingDetailsClick(vehicle)}>
@@ -3243,6 +3319,9 @@ function App() {
                           </div>
                         )
                       })()}
+                      <p className="score-summary-line">
+                        Additional repair data: {Math.max(0, repairs.length - getVehicleCoverageInfo(repairs).topOwnershipRepairCount)} jobs
+                      </p>
                       {vehicleScore && <p>{getVehicleVerdict(vehicleScore)}</p>}
                       <div className="score-explanation-card compact">
                         <h4>Why it stands out</h4>
@@ -3270,8 +3349,8 @@ function App() {
 
                 <div className="compare-repairs-panel">
                   <div className="section-heading compact">
-                    <p className="eyebrow">Common repair comparison</p>
-                    <h2>Labor time by repair</h2>
+                    <p className="eyebrow">Common repair benchmarks</p>
+                    <h2>Common Ownership Repairs</h2>
                   </div>
 
                   <div className="compare-repair-controls">
@@ -3373,6 +3452,69 @@ function App() {
                       </div>
                     </div>
                   )}
+
+                  <details className="other-compare-repairs">
+                    <summary>
+                      <span>Other available repairs</span>
+                      <em>{otherCompareRepairRows.length} shared reference repairs</em>
+                    </summary>
+                    <p className="comparison-summary-text">
+                      These repairs are shown for reference data. They are not the primary common ownership benchmarks used for the overall score.
+                    </p>
+                    {otherCompareRepairRows.length === 0 ? (
+                      <article className="empty-repairs">
+                        No shared additional repair data found for these vehicles.
+                      </article>
+                    ) : (
+                      <div className="compare-repair-table-wrap">
+                        <div className="compare-repair-table">
+                          <div
+                            className="compare-repair-header"
+                            style={{
+                              gridTemplateColumns: `minmax(190px, 1fr) repeat(${comparisonVehicles.length}, minmax(160px, 0.8fr))`,
+                            }}
+                          >
+                            <span>Repair</span>
+                            {comparisonVehicles.map(({ vehicle }) => (
+                              <span key={vehicle.id}>{getVehicleTitle(vehicle)}</span>
+                            ))}
+                          </div>
+
+                          {otherCompareRepairRows.map((row) => (
+                            <div
+                              className="compare-repair-row"
+                              key={row.key}
+                              style={{
+                                gridTemplateColumns: `minmax(190px, 1fr) repeat(${comparisonVehicles.length}, minmax(160px, 0.8fr))`,
+                              }}
+                            >
+                              <div className="compare-repair-name">
+                                <strong>{row.name}</strong>
+                              </div>
+                              {comparisonVehicles.map(({ vehicle }) => {
+                                const repair = row.cells.get(String(vehicle.id))
+                                const hours = repair ? getRepairHours(repair) : null
+
+                                return (
+                                  <div className="compare-repair-cell" key={vehicle.id}>
+                                    {repair ? (
+                                      <>
+                                        <strong>{formatHours(hours)}</strong>
+                                        <span>{formatScore(getRepairScore(repair))} / 10</span>
+                                        <em>{repair.label}</em>
+                                      </>
+                                    ) : (
+                                      <span>No data</span>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </details>
                 </div>
               </>
             )}
@@ -3433,7 +3575,7 @@ function App() {
                         {vehicleCoverageInfo.coverageLabel}
                       </span>
                       <span className="coverage-text">
-                        Based on {vehicleCoverageInfo.topOwnershipRepairCount || vehicleCoverageInfo.scoredRepairCount} common repair ratings.
+                        Score based on {vehicleCoverageInfo.topOwnershipRepairCount} of {COMMON_OWNERSHIP_REPAIR_COUNT} common ownership repairs.
                       </span>
                     </div>
                   </div>
@@ -3517,67 +3659,30 @@ function App() {
 
                 <div className="repairs-panel">
                   <div className="section-heading compact">
-                    <p className="eyebrow">Repair details</p>
-                    <h2>Common repair ratings</h2>
+                    <p className="eyebrow">Common repair benchmarks</p>
+                    <h2>Common Ownership Repairs</h2>
                   </div>
+                  <p className="repair-summary">
+                    The overall Wrenchability Score is based on these common ownership repairs when data is available.
+                  </p>
 
-                  <div className="repair-controls" aria-label="Repair list controls">
-                    <div className="filter-button-group" aria-label="Repair view filter">
-                      {REPAIR_VIEW_FILTERS.map((option) => (
-                        <button
-                          className={repairViewFilter === option.value ? 'active' : ''}
-                          key={option.value}
-                          type="button"
-                          onClick={() => setRepairViewFilter(option.value)}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="repair-control-row">
-                      <label>
-                        Sort repairs
-                        <select
-                          value={repairSortMode}
-                          onChange={(event) => setRepairSortMode(event.target.value)}
-                        >
-                          {REPAIR_SORT_MODES.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-
-                      <label>
-                        Search repairs
-                        <input
-                          type="search"
-                          value={repairSearchText}
-                          onChange={(event) => setRepairSearchText(event.target.value)}
-                          placeholder="Filter repairs..."
-                        />
-                      </label>
-                    </div>
-                  </div>
-
-                  <p className="repair-summary">{repairSummaryText}</p>
-
-                  <div className="repair-list">
-                    {visibleRepairs.length === 0 && (
+                  <div className="repair-list common-repair-list">
+                    {commonOwnershipRepairs.length === 0 && (
                       <article className="empty-repairs">
-                        No repairs match your current filters.
+                        No common ownership repair data is available for this vehicle yet.
                       </article>
                     )}
-                    {visibleRepairs.map((repair) => (
+                    {commonOwnershipRepairs.map((repair) => (
                       <article className="repair-row" key={repair.id}>
                         <div className="repair-main">
                           <h3>{getRepairName(repair)}</h3>
-                          <span>{Number(getRepairHours(repair)).toFixed(1)} labor hours</span>
+                          <span>{formatHours(getRepairHours(repair))}</span>
                           {getRepairCategory(repair) && (
                             <p className="repair-detail">{getRepairCategory(repair)}</p>
                           )}
+                          <p className="repair-detail">
+                            {buildRepairLaborExplanation(getRepairHours(repair))}
+                          </p>
                         </div>
                         <div className="repair-score">
                           <div className="score-line">
@@ -3598,6 +3703,97 @@ function App() {
                       </article>
                     ))}
                   </div>
+
+                  <details className="additional-repairs-panel">
+                    <summary>
+                      <span>All Available Repair Data</span>
+                      <em>{additionalRepairs.length} additional repair jobs available</em>
+                    </summary>
+                    <p className="repair-summary">
+                      These repairs are shown for reference. They do not all carry equal weight in the overall Wrenchability Score.
+                    </p>
+
+                    <div className="repair-controls" aria-label="Additional repair list controls">
+                      <div className="filter-button-group" aria-label="Additional repair view filter">
+                        {REPAIR_VIEW_FILTERS.filter((option) => option.value !== 'top-ownership').map((option) => (
+                          <button
+                            className={repairViewFilter === option.value ? 'active' : ''}
+                            key={option.value}
+                            type="button"
+                            onClick={() => setRepairViewFilter(option.value)}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="repair-control-row">
+                        <label>
+                          Sort repairs
+                          <select
+                            value={repairSortMode}
+                            onChange={(event) => setRepairSortMode(event.target.value)}
+                          >
+                            {REPAIR_SORT_MODES.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label>
+                          Search repairs
+                          <input
+                            type="search"
+                            value={repairSearchText}
+                            onChange={(event) => setRepairSearchText(event.target.value)}
+                            placeholder="Filter additional repairs..."
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    <p className="repair-summary">{repairSummaryText}</p>
+
+                    <div className="repair-list">
+                      {visibleRepairs.length === 0 && (
+                        <article className="empty-repairs">
+                          No additional repairs match your current filters.
+                        </article>
+                      )}
+                      {visibleRepairs.map((repair) => (
+                        <article className="repair-row" key={repair.id}>
+                          <div className="repair-main">
+                            <h3>{getRepairName(repair)}</h3>
+                            <span>{formatHours(getRepairHours(repair))}</span>
+                            {getRepairCategory(repair) && (
+                              <p className="repair-detail">{getRepairCategory(repair)}</p>
+                            )}
+                            <p className="repair-detail">
+                              {buildRepairLaborExplanation(getRepairHours(repair))}
+                            </p>
+                          </div>
+                          <div className="repair-score">
+                            <div className="score-line">
+                              <strong>{formatScore(repair.score)} / 10</strong>
+                              <span className={`label-pill ${scoreClass(repair.score)}`}>
+                                {repair.label}
+                              </span>
+                            </div>
+                            <div className="meter" aria-label={`${repair.score} out of 10`}>
+                              <span
+                                className={scoreClass(repair.score)}
+                                style={{
+                                  width: `${Math.max(0, Math.min(Number(repair.score), 10)) * 10}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </details>
                 </div>
                 <p className="profile-disclaimer">
                   Scores are estimates based on common repair labor times. Labor-time
