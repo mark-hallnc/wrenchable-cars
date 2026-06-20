@@ -75,6 +75,7 @@ import Footer from './components/Footer'
 import SearchPanel from './components/SearchPanel'
 import DataStatus from './components/DataStatus'
 import RepairList from './components/RepairList'
+import AdminDataReview from './components/AdminDataReview'
 import PrivacyPolicyPage from './components/PrivacyPolicyPage'
 function App() {
   const [pagePath, setPagePath] = useState(getCurrentPagePath)
@@ -119,12 +120,24 @@ function App() {
   const [compareRepairView, setCompareRepairView] = useState('top-ownership')
   const [compareRepairSort, setCompareRepairSort] = useState('recommended')
   const isPrivacyPage = pagePath === '/privacy'
+  const isAdminView = activeView === 'admin'
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
 
     const handlePopState = () => {
       setPagePath(getCurrentPagePath())
+      const nextUrlState = getInitialUrlState()
+
+      if (nextUrlState.view === 'admin') {
+        setActiveView('admin')
+      } else if (nextUrlState.view === 'rankings') {
+        setActiveView('rankings')
+      } else if (nextUrlState.view === 'compare') {
+        setActiveView('compare')
+      } else {
+        setActiveView('search')
+      }
     }
 
     window.addEventListener('popstate', handlePopState)
@@ -553,6 +566,11 @@ function App() {
       return
     }
 
+    if (view === 'admin') {
+      updateBrowserUrl({ view: 'admin' })
+      return
+    }
+
     if (view === 'search') {
       if (status === 'success' && result?.vehicle?.id) {
         updateBrowserUrl({ view: 'vehicle', vehicleId: result.vehicle.id })
@@ -689,7 +707,7 @@ function App() {
   useEffect(() => {
     const initialUrlState = getInitialUrlState()
 
-    if (initialUrlState.view === 'compare') {
+    if (initialUrlState.view === 'compare' || initialUrlState.view === 'admin') {
       return
     }
 
@@ -731,6 +749,13 @@ function App() {
       if (initialUrlState.view === 'rankings') {
         setActiveView('rankings')
         updateBrowserUrl({ view: 'rankings' }, 'replace')
+        setInitialUrlHandled(true)
+        return
+      }
+
+      if (initialUrlState.view === 'admin') {
+        setActiveView('admin')
+        updateBrowserUrl({ view: 'admin' }, 'replace')
         setInitialUrlHandled(true)
         return
       }
@@ -1148,6 +1173,8 @@ function App() {
 
       {isPrivacyPage ? (
         <PrivacyPolicyPage onBack={goToHomePage} />
+      ) : isAdminView ? (
+        <AdminDataReview />
       ) : (
       <main id="top">
         <Hero>
