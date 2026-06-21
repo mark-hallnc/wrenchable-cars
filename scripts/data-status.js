@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { isCommonOwnershipRepairSlug } from '../src/lib/commonRepairs.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -64,10 +65,20 @@ async function selectAllRows(tableName, selectColumns) {
   let start = 0;
 
   while (true) {
-    const { data, error } = await supabase
+    let query = supabase
       .from(tableName)
-      .select(selectColumns)
-      .range(start, start + pageSize - 1);
+      .select(selectColumns);
+
+    if (tableName === 'repair_scores') {
+      query = query
+        .order('vehicle_id', { ascending: true })
+        .order('repair_task_id', { ascending: true })
+        .order('id', { ascending: true });
+    } else {
+      query = query.order('id', { ascending: true });
+    }
+
+    const { data, error } = await query.range(start, start + pageSize - 1);
 
     if (error) {
       throw new Error(`Failed to load ${tableName}: ${error.message}`);
@@ -113,15 +124,26 @@ async function main() {
   ] = await Promise.all([
     selectAllRows('vehicles', 'id, year, make, model, engine, source_engine_slug'),
     selectAllRows('vehicle_scores', 'id, vehicle_id'),
-    selectAllRows('repair_scores', 'id, vehicle_id'),
+    selectAllRows('repair_scores', 'id, vehicle_id, repair_task_id, wrenchability_score'),
     selectAllRows('labor_estimates', 'id'),
-    selectAllRows('repair_tasks', 'id'),
+    selectAllRows('repair_tasks', 'id, source_job_slug'),
     selectAllRows('openlabor_import_queue', 'id, status'),
   ]);
 
   const vehicleScoresByVehicleId = new Set(vehicleScores.map((score) => score.vehicle_id));
   const repairScoresByVehicleId = new Set(repairScores.map((score) => score.vehicle_id));
   const vehiclesById = new Map(vehicles.map((vehicle) => [vehicle.id, vehicle]));
+  const repairTasksById = new Map(repairTasks.map((task) => [task.id, task]));
+  const exactCommonScoreCountsByVehicleId = new Map();
+
+  for (const repairScore of repairScores) {
+    const task = repairTasksById.get(repairScore.repair_task_id);
+    const score = Number(repairScore.wrenchability_score);
+
+    if (isCommonOwnershipRepairSlug(task?.source_job_slug) && Number.isFinite(score)) {
+      incrementMap(exactCommonScoreCountsByVehicleId, repairScore.vehicle_id);
+    }
+  }
 
   const engineSpecificVehicles = vehicles.filter(
     (vehicle) => hasText(vehicle.engine) || hasText(vehicle.source_engine_slug),
@@ -131,6 +153,12 @@ async function main() {
   );
 
   const missingScoreVehicles = vehicles.filter((vehicle) => !vehicleScoresByVehicleId.has(vehicle.id));
+  const missingScoreVehiclesWithExactCommonScores = missingScoreVehicles.filter((vehicle) =>
+    (exactCommonScoreCountsByVehicleId.get(vehicle.id) ?? 0) > 0,
+  );
+  const missingScoreVehiclesWithZeroExactCommonScores = missingScoreVehicles.filter((vehicle) =>
+    (exactCommonScoreCountsByVehicleId.get(vehicle.id) ?? 0) === 0,
+  );
   const scoredVehiclesWithoutRepairScores = vehicleScores
     .filter((score) => !repairScoresByVehicleId.has(score.vehicle_id))
     .map((score) => vehiclesById.get(score.vehicle_id))
@@ -178,6 +206,8 @@ async function main() {
 
   printSection('Vehicles missing scores');
   console.log(`count: ${missingScoreVehicles.length}`);
+  console.log(`with exact common repair scores: ${missingScoreVehiclesWithExactCommonScores.length}`);
+  console.log(`with zero exact common repair scores: ${missingScoreVehiclesWithZeroExactCommonScores.length}`);
   printExamples(missingScoreVehicles);
 
   printSection('Scored vehicles with zero repair scores');
@@ -199,8 +229,10 @@ async function main() {
 
   if (pendingQueueRows > 0) {
     console.log('Next: npm.cmd run data:process -- --limit=25');
-  } else if (missingScoreVehicles.length > 0) {
+  } else if (missingScoreVehiclesWithExactCommonScores.length > 0) {
     console.log('Next: npm.cmd run recalculate:scores');
+  } else if (missingScoreVehicles.length > 0) {
+    console.log('Database looks ready for frontend testing. Remaining missing scores have zero exact common repair scores.');
   } else {
     console.log('Database looks ready for frontend testing.');
   }

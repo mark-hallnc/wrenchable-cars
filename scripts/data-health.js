@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
 import {
   COMMON_OWNERSHIP_REPAIR_COUNT,
+  COMMON_OWNERSHIP_REPAIR_SLUGS,
   isCommonOwnershipRepairSlug,
 } from '../src/lib/commonRepairs.js';
 import { formatError, formatSupabaseError } from './lib/errors.js';
@@ -60,6 +61,10 @@ function parseCliArgs(argv = process.argv.slice(2)) {
 
 function hasText(value) {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeText(value) {
+  return String(value ?? '').trim().toLowerCase();
 }
 
 function vehicleMatchesFilters(vehicle, filters) {
@@ -136,9 +141,18 @@ async function selectAllRows(tableName, selectColumns, filters = {}) {
   while (true) {
     let query = supabase
       .from(tableName)
-      .select(selectColumns)
-      .order('id', { ascending: true })
-      .range(start, start + pageSize - 1);
+      .select(selectColumns);
+
+    if (tableName === 'repair_scores' || tableName === 'labor_estimates') {
+      query = query
+        .order('vehicle_id', { ascending: true })
+        .order('repair_task_id', { ascending: true })
+        .order('id', { ascending: true });
+    } else {
+      query = query.order('id', { ascending: true });
+    }
+
+    query = query.range(start, start + pageSize - 1);
 
     if (tableName === 'vehicles') {
       query = applyVehicleFilters(query, filters);
@@ -233,6 +247,17 @@ function printReport(report) {
   console.log(`duplicate repair_scores by vehicle_id + repair_task_id: ${report.duplicates.repairScores}`);
   console.log(`duplicate labor_estimates by vehicle_id + repair_task_id: ${report.duplicates.laborEstimates}`);
 
+  printSection('Possible common repair aliases not currently counted');
+  if (report.possibleCommonRepairAliases.length === 0) {
+    console.log('none found');
+  } else {
+    for (const alias of report.possibleCommonRepairAliases) {
+      console.log(
+        `- ${alias.source_job_slug}: ${alias.name}; possible match: ${alias.possible_common_slug}; repair_scores: ${alias.repair_score_count}`,
+      );
+    }
+  }
+
   printSection('Problem examples');
   for (const [title, examples] of Object.entries(report.examples)) {
     printExamples(title, examples);
@@ -254,7 +279,7 @@ async function buildHealthReport(options) {
     selectAllRows('vehicle_scores', 'id, vehicle_id'),
     selectAllRows('repair_scores', 'id, vehicle_id, repair_task_id, wrenchability_score'),
     selectAllRows('labor_estimates', 'id, vehicle_id, repair_task_id'),
-    selectAllRows('repair_tasks', 'id, source_job_slug'),
+    selectAllRows('repair_tasks', 'id, name, source_job_slug'),
     selectAllRows('openlabor_import_queue', 'id, status'),
     countRows('vehicles', options),
   ]);
@@ -335,6 +360,50 @@ async function buildHealthReport(options) {
     laborEstimates.filter((row) => filteredVehicleIds.has(String(row.vehicle_id))),
     (row) => `${row.vehicle_id}|${row.repair_task_id}`,
   );
+  const repairScoreCountsByRepairTaskId = new Map();
+
+  for (const repairScore of repairScores) {
+    if (!filteredVehicleIds.has(String(repairScore.vehicle_id))) continue;
+    incrementMap(repairScoreCountsByRepairTaskId, repairScore.repair_task_id);
+  }
+
+  const canonicalizeCommonAlias = (value) =>
+    normalizeText(value)
+      .replace(/headlamp/g, 'headlight')
+      .replace(/taillight/g, 'tail-light')
+      .replace(/tail-lamp/g, 'tail-light')
+      .split('-')
+      .filter(Boolean)
+      .map((token) => (token.endsWith('s') ? token.slice(0, -1) : token))
+      .filter((token) => token !== 'all')
+      .join('-');
+  const canonicalCommonSlugs = new Map(
+    COMMON_OWNERSHIP_REPAIR_SLUGS.map((slug) => [canonicalizeCommonAlias(slug), slug]),
+  );
+  const possibleCommonRepairAliases = repairTasks
+    .filter((task) => !isCommonOwnershipRepairSlug(task.source_job_slug))
+    .map((task) => {
+      const slug = normalizeText(task.source_job_slug);
+      const name = normalizeText(task.name);
+      const possibleMatch =
+        canonicalCommonSlugs.get(canonicalizeCommonAlias(slug)) ??
+        canonicalCommonSlugs.get(canonicalizeCommonAlias(name.replace(/\s+/g, '-')));
+
+      return possibleMatch
+        ? {
+            source_job_slug: task.source_job_slug,
+            name: task.name,
+            possible_common_slug: possibleMatch,
+            repair_score_count: repairScoreCountsByRepairTaskId.get(task.id) ?? 0,
+          }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((left, right) =>
+      right.repair_score_count - left.repair_score_count ||
+      String(left.source_job_slug).localeCompare(String(right.source_job_slug)),
+    )
+    .slice(0, limit);
 
   return {
     filters: {
@@ -364,6 +433,7 @@ async function buildHealthReport(options) {
       repairScores: duplicateRepairScoreCount,
       laborEstimates: duplicateLaborEstimateCount,
     },
+    possibleCommonRepairAliases,
     examples: {
       vehiclesMissingVehicleScores: selectExampleRows(
         missingVehicleScores.map((vehicle) => getVehicleIssueExample(vehicle, 'missing vehicle_scores row')),

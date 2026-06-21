@@ -1,10 +1,8 @@
 import { supabase } from './supabaseClient'
 import {
   COMMON_OWNERSHIP_REPAIR_COUNT,
-  COMMON_OWNERSHIP_REPAIR_NAME_KEYWORDS,
   COMMON_OWNERSHIP_REPAIR_SLUGS,
   getCommonRepairCoverage,
-  isCommonOwnershipRepairSlug,
 } from './commonRepairs'
 
 export const BRAND = {
@@ -284,16 +282,7 @@ export const getTopOwnershipOrder = (repair) => {
   const slug = normalizeText(getRepairSlug(repair))
   const slugIndex = COMMON_OWNERSHIP_REPAIR_SLUGS.indexOf(slug)
 
-  if (slugIndex >= 0) return slugIndex
-
-  const repairName = normalizeText(getRepairName(repair))
-  const keywordMatch = COMMON_OWNERSHIP_REPAIR_NAME_KEYWORDS.find(({ keywords }) =>
-    keywords.every((keyword) => repairName.includes(keyword)),
-  )
-
-  return keywordMatch
-    ? COMMON_OWNERSHIP_REPAIR_SLUGS.indexOf(keywordMatch.slug)
-    : Number.POSITIVE_INFINITY
+  return slugIndex >= 0 ? slugIndex : Number.POSITIVE_INFINITY
 }
 
 export const isTopOwnershipRepair = (repair) => Number.isFinite(getTopOwnershipOrder(repair))

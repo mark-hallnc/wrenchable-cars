@@ -10,7 +10,10 @@ import {
   vehicleScoreLabelFromScore,
 } from './lib/scoring.js';
 import { formatError, formatSupabaseError } from './lib/errors.js';
-import { isCommonOwnershipRepairSlug } from '../src/lib/commonRepairs.js';
+import {
+  COMMON_OWNERSHIP_REPAIR_SLUGS,
+  isCommonOwnershipRepairSlug,
+} from '../src/lib/commonRepairs.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -97,7 +100,11 @@ async function selectAllRows(tableName, selectColumns, filters = []) {
   let start = 0;
 
   while (true) {
-    let query = supabase.from(tableName).select(selectColumns).range(start, start + pageSize - 1);
+    let query = supabase
+      .from(tableName)
+      .select(selectColumns)
+      .order('id', { ascending: true })
+      .range(start, start + pageSize - 1);
 
     for (const filter of filters) {
       const { column, operator, value } = filter;
@@ -247,6 +254,21 @@ function chooseRepairScoreWinner(existingRow, nextRow) {
   return existingRow;
 }
 
+function chooseLaborEstimateWinner(existingRow, nextRow) {
+  const existingHasLaborHours = hasValidNumber(existingRow.labor_hours);
+  const nextHasLaborHours = hasValidNumber(nextRow.labor_hours);
+
+  if (existingHasLaborHours !== nextHasLaborHours) {
+    return nextHasLaborHours ? nextRow : existingRow;
+  }
+
+  if (existingHasLaborHours && nextHasLaborHours) {
+    return Number(nextRow.labor_hours) < Number(existingRow.labor_hours) ? nextRow : existingRow;
+  }
+
+  return String(nextRow.id).localeCompare(String(existingRow.id)) < 0 ? nextRow : existingRow;
+}
+
 function chooseVehicleScoreWinner(existingRow, nextRow) {
   const existingHasOverallScore = hasValidNumber(existingRow.overall_score);
   const nextHasOverallScore = hasValidNumber(nextRow.overall_score);
@@ -277,7 +299,9 @@ function printVehicleDebug(debugInfo) {
   console.log(`source_engine_slug: ${debugInfo.vehicle?.source_engine_slug ?? 'none'}`);
   console.log(`total labor estimates found: ${debugInfo.totalLaborEstimatesFound}`);
   console.log(`total repair_scores found: ${debugInfo.totalRepairScoresFound}`);
-  console.log(`common repair scores found: ${debugInfo.commonRepairScoresFound}`);
+  console.log(`exact common repair scores found: ${debugInfo.exactCommonRepairScoresFound}`);
+  console.log(`exact common slugs found: ${debugInfo.exactCommonSlugsFound.join(', ') || 'none'}`);
+  console.log(`expected common slugs missing: ${debugInfo.expectedCommonSlugsMissing.join(', ') || 'none'}`);
   console.log(`valid common repair scores used: ${debugInfo.validCommonRepairScoresUsed}`);
   console.log(`calculated overall_score: ${debugInfo.overallScore ?? 'none'}`);
   console.log(`calculated score_label: ${debugInfo.scoreLabel ?? 'none'}`);
@@ -289,7 +313,7 @@ function printVehicleDebug(debugInfo) {
 export async function recalculateScores(options = {}) {
   const log = options.log ?? true;
   const debugVehicleId = options.vehicleId ? String(options.vehicleId) : '';
-  const [laborEstimates, repairTasks, vehicles] = await Promise.all([
+  const [rawLaborEstimates, repairTasks, vehicles] = await Promise.all([
     selectAllRows(
       'labor_estimates',
       'id, vehicle_id, repair_task_id, labor_hours, source_operation_name, source_notes',
@@ -303,6 +327,12 @@ export async function recalculateScores(options = {}) {
     selectAllRows('vehicles', 'id, year, make, model, engine, source_engine_slug'),
   ]);
 
+  const dedupedLaborEstimates = dedupeByKey(
+    rawLaborEstimates,
+    (row) => `${row.vehicle_id}:${row.repair_task_id}`,
+    chooseLaborEstimateWinner,
+  );
+  const laborEstimates = dedupedLaborEstimates.rows;
   const laborEstimatesByRepairTask = new Map();
   const laborEstimateCountByVehicleId = new Map();
 
@@ -319,6 +349,7 @@ export async function recalculateScores(options = {}) {
   }
 
   const vehiclesById = new Map(vehicles.map((vehicle) => [String(vehicle.id), vehicle]));
+  const repairTasksById = new Map(repairTasks.map((task) => [task.id, task]));
 
   const timestamp = nowIso();
   const repairScoreRows = [];
@@ -450,20 +481,27 @@ export async function recalculateScores(options = {}) {
   const staleVehicleScoresDeleted = staleVehicleScoreDeleteResult.deletedCount;
   const vehicleScoresAfterRun = await selectAllRows('vehicle_scores', 'id, vehicle_id, overall_score, score_label');
   const vehicleScoreVehicleIdsAfterRun = new Set(vehicleScoresAfterRun.map((score) => String(score.vehicle_id)));
-  const missingScoreExamples = [];
+  const missingExactCommonScoreExamples = [];
+  const repairScoresWithZeroExactCommonExamples = [];
 
   for (const [vehicleId, repairRows] of repairScoresByVehicleId.entries()) {
-    if (vehicleScoreVehicleIdsAfterRun.has(vehicleId)) continue;
-
     const commonRepairCount = (validCommonScoresByVehicleId.get(vehicleId) ?? []).length;
     if (repairRows.length === 0) continue;
 
     const vehicle = vehiclesById.get(vehicleId);
-    missingScoreExamples.push({
+    const example = {
       vehicle,
       repairScoreCount: repairRows.length,
       commonRepairCount,
-    });
+    };
+
+    if (!vehicleScoreVehicleIdsAfterRun.has(vehicleId) && commonRepairCount > 0) {
+      missingExactCommonScoreExamples.push(example);
+    }
+
+    if (commonRepairCount === 0) {
+      repairScoresWithZeroExactCommonExamples.push(example);
+    }
   }
 
   const debugInfo = debugVehicleId
@@ -471,13 +509,23 @@ export async function recalculateScores(options = {}) {
         const vehicleScores = repairScoresByVehicleId.get(debugVehicleId) ?? [];
         const validCommonScores = validCommonScoresByVehicleId.get(debugVehicleId) ?? [];
         const scoreRow = dedupedVehicleScores.rows.find((row) => String(row.vehicle_id) === debugVehicleId);
+        const exactCommonSlugsFound = [
+          ...new Set(
+            validCommonScores
+              .map((score) => repairTasksById.get(score.repair_task_id)?.source_job_slug)
+              .filter(Boolean),
+          ),
+        ].sort();
+        const exactCommonSlugSet = new Set(exactCommonSlugsFound);
 
         return {
           vehicleId: debugVehicleId,
           vehicle: vehiclesById.get(debugVehicleId),
           totalLaborEstimatesFound: laborEstimateCountByVehicleId.get(debugVehicleId) ?? 0,
           totalRepairScoresFound: vehicleScores.length,
-          commonRepairScoresFound: vehicleScores.filter((score) => targetRepairTaskIds.has(score.repair_task_id)).length,
+          exactCommonRepairScoresFound: vehicleScores.filter((score) => targetRepairTaskIds.has(score.repair_task_id)).length,
+          exactCommonSlugsFound,
+          expectedCommonSlugsMissing: COMMON_OWNERSHIP_REPAIR_SLUGS.filter((slug) => !exactCommonSlugSet.has(slug)),
           validCommonRepairScoresUsed: validCommonScores.length,
           overallScore: scoreRow?.overall_score ?? null,
           scoreLabel: scoreRow?.score_label ?? null,
@@ -490,25 +538,38 @@ export async function recalculateScores(options = {}) {
 
   const summary = {
     totalLaborEstimatesProcessed: laborEstimates.length,
+    duplicateLaborEstimateCandidatesRemoved: dedupedLaborEstimates.duplicateCount,
     totalRepairTasksScored: repairTaskIdsScored.size,
     repairScoresUpserted,
     vehicleScoresRecalculated,
     staleVehicleScoresDeleted,
-    vehiclesWithRepairScoresMissingVehicleScores: missingScoreExamples.length,
+    vehiclesWithExactCommonRepairScoresMissingVehicleScores: missingExactCommonScoreExamples.length,
+    vehiclesWithRepairScoresButZeroExactCommonRepairScores: repairScoresWithZeroExactCommonExamples.length,
     relativeComparisonScores: relativeComparisonCount,
     fallbackBucketScores: fallbackBucketCount,
   };
 
   if (log) {
     console.log(`total labor estimates processed: ${summary.totalLaborEstimatesProcessed}`);
+    console.log(`duplicate labor estimate candidates removed before scoring: ${summary.duplicateLaborEstimateCandidatesRemoved}`);
     console.log(`total repair tasks scored: ${summary.totalRepairTasksScored}`);
     console.log(`total repair_scores upserted: ${summary.repairScoresUpserted}`);
-    console.log(`total vehicle_scores recalculated: ${summary.vehicleScoresRecalculated}`);
+    console.log(`vehicle_scores recalculated: ${summary.vehicleScoresRecalculated}`);
     console.log(`stale vehicle_scores deleted: ${summary.staleVehicleScoresDeleted}`);
-    console.log(`Vehicles with repair_scores but missing vehicle_scores: ${summary.vehiclesWithRepairScoresMissingVehicleScores}`);
-    if (missingScoreExamples.length > 0) {
-      console.log('missing vehicle_scores examples:');
-      for (const example of missingScoreExamples.slice(0, 10)) {
+    console.log(`vehicles with exact common repair scores but missing vehicle_scores: ${summary.vehiclesWithExactCommonRepairScoresMissingVehicleScores}`);
+    if (missingExactCommonScoreExamples.length > 0) {
+      console.log('missing vehicle_scores despite exact common repair scores examples:');
+      for (const example of missingExactCommonScoreExamples.slice(0, 10)) {
+        const vehicle = example.vehicle;
+        console.log(
+          `- ${vehicle?.year ?? 'unknown'} ${vehicle?.make ?? 'unknown'} ${vehicle?.model ?? 'unknown'} ${vehicle?.engine ?? 'Base / unspecified engine'} ${vehicle?.source_engine_slug ?? 'no source_engine_slug'}; repair_score_count: ${example.repairScoreCount}; common_repair_count: ${example.commonRepairCount}`,
+        );
+      }
+    }
+    console.log(`vehicles with repair_scores but zero exact common repair scores: ${summary.vehiclesWithRepairScoresButZeroExactCommonRepairScores}`);
+    if (repairScoresWithZeroExactCommonExamples.length > 0) {
+      console.log('repair_scores but zero exact common repair score examples:');
+      for (const example of repairScoresWithZeroExactCommonExamples.slice(0, 10)) {
         const vehicle = example.vehicle;
         console.log(
           `- ${vehicle?.year ?? 'unknown'} ${vehicle?.make ?? 'unknown'} ${vehicle?.model ?? 'unknown'} ${vehicle?.engine ?? 'Base / unspecified engine'} ${vehicle?.source_engine_slug ?? 'no source_engine_slug'}; repair_score_count: ${example.repairScoreCount}; common_repair_count: ${example.commonRepairCount}`,
