@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { recalculateScores } from './recalculate-wrenchability-scores.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -144,6 +145,22 @@ async function processJob(job) {
       await logJob(job.id, 'success', 'Test job completed');
       await updateJobStatus(job.id, 'completed', {
         result: { ok: true },
+        error: null,
+        finished_at: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (job.type === 'recalculate_scores') {
+      await logJob(job.id, 'info', 'Starting score recalculation...', job.payload ?? {});
+      const result = await recalculateScores({
+        logger: async (level, message, data) => {
+          await logJob(job.id, level, message, data);
+        },
+      });
+      await logJob(job.id, 'success', 'Score recalculation completed', result);
+      await updateJobStatus(job.id, 'completed', {
+        result,
         error: null,
         finished_at: new Date().toISOString(),
       });

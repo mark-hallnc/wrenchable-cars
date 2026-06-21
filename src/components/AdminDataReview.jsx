@@ -496,6 +496,41 @@ export default function AdminDataReview({
     }
   }
 
+  const createRecalculateScoresJob = async () => {
+    setIsCreatingJob(true)
+    setJobsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data, error: createError } = await supabase
+        .from('admin_jobs')
+        .insert({
+          type: 'recalculate_scores',
+          payload: {
+            source: 'admin_ui',
+          },
+        })
+        .select('id, type, status, payload, result, error, created_at, started_at, finished_at, updated_at')
+        .single()
+
+      if (createError) throw createError
+
+      setSelectedJobId(data.id)
+      setJobLogs([])
+      setOperationNotice('Job queued. Run npm.cmd run admin:worker -- --once locally to process it.')
+      await loadJobs(data.id)
+      await loadJobLogs(data.id)
+    } catch (createError) {
+      console.error('Error creating recalculate scores job:', createError)
+      setJobsError(createError instanceof Error ? createError.message : 'Unable to create recalculate scores job.')
+    } finally {
+      setIsCreatingJob(false)
+    }
+  }
+
   if (!isUnlocked) {
     return (
       <main id="top">
@@ -787,6 +822,9 @@ export default function AdminDataReview({
               <div className="admin-operations-toolbar">
                 <button type="button" onClick={createTestJob} disabled={isCreatingJob}>
                   {isCreatingJob ? 'Creating...' : 'Create Test Job'}
+                </button>
+                <button type="button" onClick={createRecalculateScoresJob} disabled={isCreatingJob}>
+                  Recalculate Scores
                 </button>
                 <button className="secondary-button" type="button" onClick={loadJobs}>
                   Refresh Jobs

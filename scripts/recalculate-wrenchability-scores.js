@@ -312,6 +312,21 @@ function printVehicleDebug(debugInfo) {
 
 export async function recalculateScores(options = {}) {
   const log = options.log ?? true;
+  const logger = typeof options.logger === 'function' ? options.logger : null;
+  const emitLog = async (level, message, data = null) => {
+    if (log) {
+      const consoleMethod = level === 'error'
+        ? 'error'
+        : level === 'warn'
+          ? 'warn'
+          : 'log';
+      console[consoleMethod](message);
+    }
+
+    if (logger) {
+      await logger(level, message, data);
+    }
+  };
   const debugVehicleId = options.vehicleId ? String(options.vehicleId) : '';
   const [rawLaborEstimates, repairTasks, vehicles] = await Promise.all([
     selectAllRows(
@@ -408,7 +423,11 @@ export async function recalculateScores(options = {}) {
   );
 
   if (dedupedRepairScores.duplicateCount > 0) {
-    console.warn(`Deduped repair_scores before upsert: ${dedupedRepairScores.duplicateCount} duplicate rows removed.`);
+    await emitLog(
+      'warn',
+      `Deduped repair_scores before upsert: ${dedupedRepairScores.duplicateCount} duplicate rows removed.`,
+      { duplicateRepairScoresRemoved: dedupedRepairScores.duplicateCount },
+    );
   }
 
   const repairScoresUpserted = await upsertRowsInChunks(
@@ -464,7 +483,11 @@ export async function recalculateScores(options = {}) {
   );
 
   if (dedupedVehicleScores.duplicateCount > 0) {
-    console.warn(`Deduped vehicle_scores before upsert: ${dedupedVehicleScores.duplicateCount} duplicate rows removed.`);
+    await emitLog(
+      'warn',
+      `Deduped vehicle_scores before upsert: ${dedupedVehicleScores.duplicateCount} duplicate rows removed.`,
+      { duplicateVehicleScoresRemoved: dedupedVehicleScores.duplicateCount },
+    );
   }
 
   const vehicleScoresRecalculated = await upsertRowsInChunks(
@@ -549,14 +572,30 @@ export async function recalculateScores(options = {}) {
     fallbackBucketScores: fallbackBucketCount,
   };
 
+  await emitLog('info', `total labor estimates processed: ${summary.totalLaborEstimatesProcessed}`, {
+    totalLaborEstimatesProcessed: summary.totalLaborEstimatesProcessed,
+  });
+  await emitLog('info', `duplicate labor estimate candidates removed before scoring: ${summary.duplicateLaborEstimateCandidatesRemoved}`, {
+    duplicateLaborEstimateCandidatesRemoved: summary.duplicateLaborEstimateCandidatesRemoved,
+  });
+  await emitLog('info', `total repair tasks scored: ${summary.totalRepairTasksScored}`, {
+    totalRepairTasksScored: summary.totalRepairTasksScored,
+  });
+  await emitLog('info', `total repair_scores upserted: ${summary.repairScoresUpserted}`, {
+    repairScoresUpserted: summary.repairScoresUpserted,
+  });
+  await emitLog('info', `vehicle_scores recalculated: ${summary.vehicleScoresRecalculated}`, {
+    vehicleScoresRecalculated: summary.vehicleScoresRecalculated,
+  });
+  await emitLog('info', `stale vehicle_scores deleted: ${summary.staleVehicleScoresDeleted}`, {
+    staleVehicleScoresDeleted: summary.staleVehicleScoresDeleted,
+  });
+  await emitLog('info', `vehicles with exact common repair scores but missing vehicle_scores: ${summary.vehiclesWithExactCommonRepairScoresMissingVehicleScores}`, {
+    vehiclesWithExactCommonRepairScoresMissingVehicleScores:
+      summary.vehiclesWithExactCommonRepairScoresMissingVehicleScores,
+  });
+
   if (log) {
-    console.log(`total labor estimates processed: ${summary.totalLaborEstimatesProcessed}`);
-    console.log(`duplicate labor estimate candidates removed before scoring: ${summary.duplicateLaborEstimateCandidatesRemoved}`);
-    console.log(`total repair tasks scored: ${summary.totalRepairTasksScored}`);
-    console.log(`total repair_scores upserted: ${summary.repairScoresUpserted}`);
-    console.log(`vehicle_scores recalculated: ${summary.vehicleScoresRecalculated}`);
-    console.log(`stale vehicle_scores deleted: ${summary.staleVehicleScoresDeleted}`);
-    console.log(`vehicles with exact common repair scores but missing vehicle_scores: ${summary.vehiclesWithExactCommonRepairScoresMissingVehicleScores}`);
     if (missingExactCommonScoreExamples.length > 0) {
       console.log('missing vehicle_scores despite exact common repair scores examples:');
       for (const example of missingExactCommonScoreExamples.slice(0, 10)) {
@@ -566,7 +605,14 @@ export async function recalculateScores(options = {}) {
         );
       }
     }
-    console.log(`vehicles with repair_scores but zero exact common repair scores: ${summary.vehiclesWithRepairScoresButZeroExactCommonRepairScores}`);
+  }
+
+  await emitLog('info', `vehicles with repair_scores but zero exact common repair scores: ${summary.vehiclesWithRepairScoresButZeroExactCommonRepairScores}`, {
+    vehiclesWithRepairScoresButZeroExactCommonRepairScores:
+      summary.vehiclesWithRepairScoresButZeroExactCommonRepairScores,
+  });
+
+  if (log) {
     if (repairScoresWithZeroExactCommonExamples.length > 0) {
       console.log('repair_scores but zero exact common repair score examples:');
       for (const example of repairScoresWithZeroExactCommonExamples.slice(0, 10)) {
@@ -577,9 +623,14 @@ export async function recalculateScores(options = {}) {
       }
     }
     printVehicleDebug(debugInfo);
-    console.log(`relative comparison scores: ${summary.relativeComparisonScores}`);
-    console.log(`fallback bucket scores: ${summary.fallbackBucketScores}`);
   }
+
+  await emitLog('info', `relative comparison scores: ${summary.relativeComparisonScores}`, {
+    relativeComparisonScores: summary.relativeComparisonScores,
+  });
+  await emitLog('info', `fallback bucket scores: ${summary.fallbackBucketScores}`, {
+    fallbackBucketScores: summary.fallbackBucketScores,
+  });
 
   return summary;
 }
