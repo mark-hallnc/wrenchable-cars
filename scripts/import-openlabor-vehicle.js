@@ -457,6 +457,7 @@ async function upsertRowByFilters(tableName, filters, row, selectColumns = '*') 
 
 function buildSkippedResult(vehicle, response) {
   return {
+    success: true,
     skipped: true,
     reason: 'NOT_FOUND',
     vehicleId: null,
@@ -470,6 +471,85 @@ function buildSkippedResult(vehicle, response) {
     overallScore: null,
     rateLimitRemaining: response.headers.get('X-RateLimit-Remaining-Daily') ?? '',
   };
+}
+
+function isMissingConflictConstraintError(error) {
+  const message = formatError(error).toLowerCase();
+
+  return (
+    message.includes('42p10') ||
+    message.includes('no unique or exclusion constraint') ||
+    message.includes('on conflict')
+  );
+}
+
+async function syncLaborEstimates(vehicleId, laborEstimateRows) {
+  try {
+    return await upsertRowsInChunks(
+      'labor_estimates',
+      laborEstimateRows,
+      'vehicle_id,repair_task_id',
+      'id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes',
+    );
+  } catch (error) {
+    if (!isMissingConflictConstraintError(error)) {
+      throw error;
+    }
+
+    console.warn('labor_estimates unique constraint is not available yet; using lookup/update fallback.');
+  }
+
+  const existingLaborEstimates = await supabase
+    .from('labor_estimates')
+    .select('id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes')
+    .eq('vehicle_id', vehicleId)
+    .eq('source', 'openlabor');
+
+  if (existingLaborEstimates.error) {
+    throwSupabaseError('Failed to fetch existing labor estimates', existingLaborEstimates.error);
+  }
+
+  const laborEstimateByTaskId = new Map(
+    (existingLaborEstimates.data ?? []).map((estimate) => [estimate.repair_task_id, estimate]),
+  );
+  const laborEstimates = [];
+  const newLaborEstimateRows = [];
+
+  for (const laborEstimateRow of laborEstimateRows) {
+    const existingEstimate = laborEstimateByTaskId.get(laborEstimateRow.repair_task_id);
+
+    if (!existingEstimate) {
+      newLaborEstimateRows.push(laborEstimateRow);
+      continue;
+    }
+
+    const updatedEstimate = rowMatches(existingEstimate, laborEstimateRow, [
+      'labor_hours',
+      'source_operation_name',
+      'source_notes',
+    ])
+      ? existingEstimate
+      : await updateRowById(
+          'labor_estimates',
+          existingEstimate.id,
+          laborEstimateRow,
+          'id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes',
+        );
+
+    laborEstimates.push(updatedEstimate);
+  }
+
+  if (newLaborEstimateRows.length > 0) {
+    const insertedLaborEstimates = await insertRowsInChunks(
+      'labor_estimates',
+      newLaborEstimateRows,
+      'id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes',
+    );
+
+    laborEstimates.push(...insertedLaborEstimates);
+  }
+
+  return laborEstimates;
 }
 
 export async function importOpenLaborVehicle(options = {}) {
@@ -622,16 +702,12 @@ export async function importOpenLaborVehicle(options = {}) {
       .filter(Boolean);
 
     console.log('Syncing labor estimates...');
-    const laborEstimates = await upsertRowsInChunks(
-      'labor_estimates',
-      laborEstimateRows,
-      'vehicle_id,repair_task_id',
-      'id, vehicle_id, repair_task_id, labor_hours, source, source_operation_name, source_notes',
-    );
+    const laborEstimates = await syncLaborEstimates(vehicleId, laborEstimateRows);
 
     const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining-Daily') ?? '';
 
     const result = {
+      success: true,
       skipped: false,
       reason: null,
       vehicleId,
@@ -665,6 +741,18 @@ export async function importOpenLaborVehicle(options = {}) {
       } catch (queueError) {
         console.error(`Failed to update queue row: ${formatError(queueError)}`);
       }
+    }
+
+    if (options.returnFailureResult) {
+      return {
+        success: false,
+        error,
+        year: vehicle.year,
+        make: vehicle.make,
+        model: vehicle.model,
+        engine: vehicle.engine,
+        source_engine_slug: vehicle.engineSlug,
+      };
     }
 
     throw error;

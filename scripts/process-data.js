@@ -49,6 +49,7 @@ function validateEnvironment() {
 
 async function main() {
   const options = parseCliArgs();
+  let importHadFailures = false;
 
   validateEnvironment();
 
@@ -68,13 +69,17 @@ async function main() {
     const importSummary = await runOpenLaborQueue({
       limit: options.limit,
       minRateLimitRemaining: options.minRateLimitRemaining,
-      log: false,
+      log: true,
     });
 
     console.log(`attempted: ${importSummary.attempted}`);
     console.log(`completed: ${importSummary.completed}`);
     console.log(`skipped: ${importSummary.skipped}`);
     console.log(`failed: ${importSummary.failed}`);
+    importHadFailures = importSummary.failed > 0;
+    if (importHadFailures) {
+      console.error(`Raw import completed with failures: ${importSummary.failed} queue rows failed.`);
+    }
     if (importSummary.stoppedEarly) {
       console.log(importSummary.stopReason);
     }
@@ -101,6 +106,10 @@ async function main() {
   }
 
   console.log('\nData process complete.');
+
+  if (importHadFailures) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((error) => {

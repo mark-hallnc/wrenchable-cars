@@ -44,6 +44,7 @@ function parseCliArgs(argv = process.argv.slice(2)) {
   const args = {
     limit: 5,
     minRateLimitRemaining: DEFAULT_MIN_RATE_LIMIT_REMAINING,
+    resetFailedRecent: 0,
   };
 
   for (const arg of argv) {
@@ -53,6 +54,11 @@ function parseCliArgs(argv = process.argv.slice(2)) {
       args.minRateLimitRemaining = normalizeNonNegativeInteger(
         arg.slice('--minRateLimitRemaining='.length),
         DEFAULT_MIN_RATE_LIMIT_REMAINING,
+      );
+    } else if (arg.startsWith('--resetFailedRecent=')) {
+      args.resetFailedRecent = normalizeNonNegativeInteger(
+        arg.slice('--resetFailedRecent='.length),
+        0,
       );
     }
   }
@@ -87,6 +93,54 @@ async function fetchPendingQueueRows(limit) {
   return response;
 }
 
+function formatQueueVehicle(row) {
+  return [
+    row.year,
+    row.make,
+    row.model,
+    row.engine,
+    row.engine_slug ? `(${row.engine_slug})` : '',
+  ].filter(Boolean).join(' ');
+}
+
+async function resetFailedQueueRows(limit) {
+  const { data, error } = await supabase
+    .from('openlabor_import_queue')
+    .select('id, year, make, model, engine, engine_slug, updated_at, finished_at')
+    .eq('status', 'failed')
+    .order('updated_at', { ascending: false })
+    .order('finished_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    throw new Error(`Failed to fetch failed queue rows for reset:\n${formatSupabaseError(error)}`);
+  }
+
+  const rows = data ?? [];
+  const ids = rows.map((row) => row.id);
+
+  if (ids.length === 0) {
+    return { reset: 0, rows };
+  }
+
+  const { error: updateError } = await supabase
+    .from('openlabor_import_queue')
+    .update({
+      status: 'pending',
+      started_at: null,
+      finished_at: null,
+      last_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .in('id', ids);
+
+  if (updateError) {
+    throw new Error(`Failed to reset failed queue rows:\n${formatSupabaseError(updateError)}`);
+  }
+
+  return { reset: ids.length, rows };
+}
+
 export async function runOpenLaborQueue(options = {}) {
   const cliOptions = parseCliArgs();
   const limit = normalizeLimit(options.limit ?? cliOptions.limit, 5);
@@ -94,7 +148,34 @@ export async function runOpenLaborQueue(options = {}) {
     options.minRateLimitRemaining ?? cliOptions.minRateLimitRemaining,
     DEFAULT_MIN_RATE_LIMIT_REMAINING,
   );
+  const resetFailedRecent = normalizeNonNegativeInteger(
+    options.resetFailedRecent ?? cliOptions.resetFailedRecent,
+    0,
+  );
   const log = options.log ?? true;
+
+  if (resetFailedRecent > 0) {
+    const resetSummary = await resetFailedQueueRows(resetFailedRecent);
+
+    if (log) {
+      console.log(`reset failed queue rows: ${resetSummary.reset}`);
+      for (const row of resetSummary.rows.slice(0, 10)) {
+        console.log(`- ${formatQueueVehicle(row)}; queue id: ${row.id}`);
+      }
+    }
+
+    return {
+      attempted: 0,
+      completed: 0,
+      skipped: 0,
+      failed: 0,
+      resetFailed: resetSummary.reset,
+      rateLimitRemaining: null,
+      stoppedEarly: false,
+      stopReason: '',
+    };
+  }
+
   const { data: pendingRows, error } = await fetchPendingQueueRows(limit);
 
   if (error) {
@@ -131,6 +212,10 @@ export async function runOpenLaborQueue(options = {}) {
         queueId: row.id,
       });
 
+      if (result.success === false) {
+        throw result.error ?? new Error('Raw import returned success: false');
+      }
+
       if (result.skipped) {
         skipped += 1;
       } else {
@@ -154,7 +239,12 @@ export async function runOpenLaborQueue(options = {}) {
     } catch (error) {
       failed += 1;
       if (log) {
-        console.error(`Queue row ${row.id} failed:`);
+        console.error(`Queue row ${row.id} failed: ${formatQueueVehicle(row)}`);
+        console.error(`year: ${row.year}`);
+        console.error(`make: ${row.make}`);
+        console.error(`model: ${row.model}`);
+        console.error(`engine: ${row.engine ?? 'Base / unspecified engine'}`);
+        console.error(`source_engine_slug: ${row.engine_slug ?? 'none'}`);
         console.error(formatError(error));
       }
     }
@@ -169,6 +259,7 @@ export async function runOpenLaborQueue(options = {}) {
     completed,
     skipped,
     failed,
+    resetFailed: 0,
     rateLimitRemaining,
     stoppedEarly,
     stopReason,

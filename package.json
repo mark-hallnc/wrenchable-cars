@@ -12,6 +12,7 @@
     "test:openlabor:engines": "node scripts/test-openlabor-engines.js",
     "import:openlabor": "node scripts/import-openlabor-vehicle.js",
     "import:openlabor:queue": "node scripts/run-openlabor-queue.js",
+    "data:queue": "node scripts/run-openlabor-queue.js",
     "seed:openlabor:queue": "node scripts/seed-openlabor-queue.js",
     "seed:openlabor:engines": "node scripts/seed-openlabor-engine-queue.js",
     "seed:openlabor:engines:batch": "node scripts/seed-openlabor-engine-batch.js",
