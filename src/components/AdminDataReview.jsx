@@ -118,6 +118,7 @@ export default function AdminDataReview({
   const [logsStatus, setLogsStatus] = useState('idle')
   const [logsError, setLogsError] = useState('')
   const [isCreatingJob, setIsCreatingJob] = useState(false)
+  const [operationNotice, setOperationNotice] = useState('')
 
   const visibleRows = useMemo(() => {
     const searchText = filters.search.trim().toLowerCase()
@@ -293,7 +294,7 @@ export default function AdminDataReview({
     }
   }, [selectedJobId])
 
-  const loadJobs = useCallback(async () => {
+  const loadJobs = useCallback(async (preferredSelectedJobId = selectedJobId) => {
     setJobsStatus('loading')
     setJobsError('')
 
@@ -314,7 +315,9 @@ export default function AdminDataReview({
       setJobs(nextJobs)
       setJobsStatus('loaded')
 
-      if (!selectedJobId && nextJobs.length > 0) {
+      if (preferredSelectedJobId && nextJobs.some((job) => job.id === preferredSelectedJobId)) {
+        setSelectedJobId(preferredSelectedJobId)
+      } else if (!selectedJobId && nextJobs.length > 0) {
         setSelectedJobId(nextJobs[0].id)
       }
     } catch (loadError) {
@@ -366,8 +369,11 @@ export default function AdminDataReview({
     }
 
     const intervalId = window.setInterval(() => {
-      loadJobs()
-      loadJobLogs(selectedJob.id)
+      loadJobs(selectedJob.id)
+
+      if (selectedJob.status === 'running') {
+        loadJobLogs(selectedJob.id)
+      }
     }, 3000)
 
     return () => window.clearInterval(intervalId)
@@ -479,7 +485,8 @@ export default function AdminDataReview({
 
       setSelectedJobId(data.id)
       setJobLogs([])
-      await loadJobs()
+      setOperationNotice('Job queued. Run npm.cmd run admin:worker -- --once locally to process it.')
+      await loadJobs(data.id)
       await loadJobLogs(data.id)
     } catch (createError) {
       console.error('Error creating admin test job:', createError)
@@ -794,6 +801,15 @@ export default function AdminDataReview({
                 </button>
               </div>
 
+              <div className="admin-worker-helper-panel">
+                <span>Local worker command:</span>
+                <code>npm.cmd run admin:worker -- --once</code>
+              </div>
+
+              {operationNotice && (
+                <p className="helper-text admin-operation-notice">{operationNotice}</p>
+              )}
+
               <div className="admin-table-status">
                 <span>{jobs.length} jobs loaded</span>
                 {jobsStatus === 'loading' && <em>Loading jobs...</em>}
@@ -822,7 +838,11 @@ export default function AdminDataReview({
                       <tr
                         className={selectedJobId === job.id ? 'expanded' : ''}
                         key={job.id}
-                        onClick={() => setSelectedJobId(job.id)}
+                        onClick={() => {
+                          setSelectedJobId(job.id)
+                          setJobLogs([])
+                          setOperationNotice('')
+                        }}
                       >
                         <td>{formatDate(job.created_at)}</td>
                         <td>{job.type}</td>
@@ -883,7 +903,10 @@ export default function AdminDataReview({
                   </div>
                   {logsStatus === 'error' && <p className="helper-text notice">{logsError}</p>}
                   <div className="admin-console-log" role="log" aria-live="polite">
-                    {selectedJob && jobLogs.length === 0 && (
+                    {selectedJob?.status === 'queued' && jobLogs.length === 0 && (
+                      <div className="admin-console-empty">Job is queued. Waiting for worker...</div>
+                    )}
+                    {selectedJob && selectedJob.status !== 'queued' && jobLogs.length === 0 && (
                       <div className="admin-console-empty">No logs for this job yet.</div>
                     )}
                     {!selectedJob && (
