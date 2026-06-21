@@ -7,6 +7,7 @@ const ADMIN_PASSWORD = 'adminadminadmin'
 const ADMIN_SESSION_KEY = 'wrenchable_admin_unlocked'
 
 const PAGE_SIZES = [25, 50, 100, 250]
+const AUTO_REFRESH_JOB_STATUSES = new Set(['queued', 'running'])
 
 const SORTABLE_COLUMNS = [
   { key: 'year', label: 'Year', source: 'year' },
@@ -109,6 +110,14 @@ export default function AdminDataReview({
   const [error, setError] = useState('')
   const [expandedRowId, setExpandedRowId] = useState('')
   const [adminSection, setAdminSection] = useState('vehicles')
+  const [jobs, setJobs] = useState([])
+  const [selectedJobId, setSelectedJobId] = useState('')
+  const [jobLogs, setJobLogs] = useState([])
+  const [jobsStatus, setJobsStatus] = useState('idle')
+  const [jobsError, setJobsError] = useState('')
+  const [logsStatus, setLogsStatus] = useState('idle')
+  const [logsError, setLogsError] = useState('')
+  const [isCreatingJob, setIsCreatingJob] = useState(false)
 
   const visibleRows = useMemo(() => {
     const searchText = filters.search.trim().toLowerCase()
@@ -125,6 +134,10 @@ export default function AdminDataReview({
   const pageCount = totalCount === null ? null : Math.max(1, Math.ceil(totalCount / pageSize))
   const loadedRangeStart = totalCount === 0 ? 0 : page * pageSize + 1
   const loadedRangeEnd = page * pageSize + visibleRows.length
+  const selectedJob = useMemo(
+    () => jobs.find((job) => job.id === selectedJobId) ?? null,
+    [jobs, selectedJobId],
+  )
 
   const applyVehicleFilters = useCallback((query) => {
     let nextQuery = query
@@ -247,6 +260,71 @@ export default function AdminDataReview({
     sortConfig.key,
   ])
 
+  const loadJobLogs = useCallback(async (jobId = selectedJobId) => {
+    if (!jobId) {
+      setJobLogs([])
+      return
+    }
+
+    setLogsStatus('loading')
+    setLogsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data, error: loadLogsError } = await supabase
+        .from('admin_job_logs')
+        .select('id, job_id, level, message, data, created_at')
+        .eq('job_id', jobId)
+        .order('created_at', { ascending: true })
+        .limit(200)
+
+      if (loadLogsError) throw loadLogsError
+
+      setJobLogs(data ?? [])
+      setLogsStatus('loaded')
+    } catch (loadError) {
+      console.error('Error loading admin job logs:', loadError)
+      setJobLogs([])
+      setLogsError(loadError instanceof Error ? loadError.message : 'Unable to load job logs.')
+      setLogsStatus('error')
+    }
+  }, [selectedJobId])
+
+  const loadJobs = useCallback(async () => {
+    setJobsStatus('loading')
+    setJobsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data, error: loadJobsError } = await supabase
+        .from('admin_jobs')
+        .select('id, type, status, payload, result, error, created_at, started_at, finished_at, updated_at')
+        .order('created_at', { ascending: false })
+        .limit(50)
+
+      if (loadJobsError) throw loadJobsError
+
+      const nextJobs = data ?? []
+      setJobs(nextJobs)
+      setJobsStatus('loaded')
+
+      if (!selectedJobId && nextJobs.length > 0) {
+        setSelectedJobId(nextJobs[0].id)
+      }
+    } catch (loadError) {
+      console.error('Error loading admin jobs:', loadError)
+      setJobs([])
+      setJobsError(loadError instanceof Error ? loadError.message : 'Unable to load jobs.')
+      setJobsStatus('error')
+    }
+  }, [selectedJobId])
+
   useEffect(() => {
     if (!isUnlocked) return
 
@@ -264,6 +342,36 @@ export default function AdminDataReview({
 
     onRefreshDataStatus?.()
   }, [adminSection, dataStatusState, isUnlocked, onRefreshDataStatus])
+
+  useEffect(() => {
+    if (!isUnlocked || adminSection !== 'operations') return
+
+    loadJobs()
+  }, [adminSection, isUnlocked, loadJobs])
+
+  useEffect(() => {
+    if (!isUnlocked || adminSection !== 'operations' || !selectedJobId) return
+
+    loadJobLogs(selectedJobId)
+  }, [adminSection, isUnlocked, loadJobLogs, selectedJobId])
+
+  useEffect(() => {
+    if (
+      !isUnlocked
+      || adminSection !== 'operations'
+      || !selectedJob
+      || !AUTO_REFRESH_JOB_STATUSES.has(selectedJob.status)
+    ) {
+      return undefined
+    }
+
+    const intervalId = window.setInterval(() => {
+      loadJobs()
+      loadJobLogs(selectedJob.id)
+    }, 3000)
+
+    return () => window.clearInterval(intervalId)
+  }, [adminSection, isUnlocked, loadJobLogs, loadJobs, selectedJob])
 
   const unlock = (event) => {
     event.preventDefault()
@@ -347,6 +455,40 @@ export default function AdminDataReview({
     URL.revokeObjectURL(url)
   }
 
+  const createTestJob = async () => {
+    setIsCreatingJob(true)
+    setJobsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data, error: createError } = await supabase
+        .from('admin_jobs')
+        .insert({
+          type: 'test',
+          payload: {
+            message: 'Admin test job',
+          },
+        })
+        .select('id, type, status, payload, result, error, created_at, started_at, finished_at, updated_at')
+        .single()
+
+      if (createError) throw createError
+
+      setSelectedJobId(data.id)
+      setJobLogs([])
+      await loadJobs()
+      await loadJobLogs(data.id)
+    } catch (createError) {
+      console.error('Error creating admin test job:', createError)
+      setJobsError(createError instanceof Error ? createError.message : 'Unable to create test job.')
+    } finally {
+      setIsCreatingJob(false)
+    }
+  }
+
   if (!isUnlocked) {
     return (
       <main id="top">
@@ -418,6 +560,13 @@ export default function AdminDataReview({
               onClick={() => setAdminSection('data-status')}
             >
               Data Status
+            </button>
+            <button
+              className={adminSection === 'operations' ? 'active' : ''}
+              type="button"
+              onClick={() => setAdminSection('operations')}
+            >
+              Operations
             </button>
           </div>
 
@@ -623,6 +772,133 @@ export default function AdminDataReview({
                 helperText="Database health and import progress summary."
                 onRefresh={onRefreshDataStatus}
               />
+            </div>
+          )}
+
+          {adminSection === 'operations' && (
+            <div className="admin-operations-section">
+              <div className="admin-operations-toolbar">
+                <button type="button" onClick={createTestJob} disabled={isCreatingJob}>
+                  {isCreatingJob ? 'Creating...' : 'Create Test Job'}
+                </button>
+                <button className="secondary-button" type="button" onClick={loadJobs}>
+                  Refresh Jobs
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  onClick={() => loadJobLogs(selectedJobId)}
+                  disabled={!selectedJobId}
+                >
+                  Refresh Logs
+                </button>
+              </div>
+
+              <div className="admin-table-status">
+                <span>{jobs.length} jobs loaded</span>
+                {jobsStatus === 'loading' && <em>Loading jobs...</em>}
+                {jobsStatus === 'error' && <em className="admin-error">{jobsError}</em>}
+              </div>
+
+              <div className="admin-table-wrap admin-jobs-table-wrap">
+                <table className="admin-table admin-jobs-table">
+                  <thead>
+                    <tr>
+                      <th>Created</th>
+                      <th>Type</th>
+                      <th>Status</th>
+                      <th>Started</th>
+                      <th>Finished</th>
+                      <th>Error</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {jobsStatus === 'loaded' && jobs.length === 0 && (
+                      <tr>
+                        <td colSpan="6">No admin jobs yet.</td>
+                      </tr>
+                    )}
+                    {jobs.map((job) => (
+                      <tr
+                        className={selectedJobId === job.id ? 'expanded' : ''}
+                        key={job.id}
+                        onClick={() => setSelectedJobId(job.id)}
+                      >
+                        <td>{formatDate(job.created_at)}</td>
+                        <td>{job.type}</td>
+                        <td>
+                          <span className={`admin-job-status admin-job-status-${job.status}`}>
+                            {job.status}
+                          </span>
+                        </td>
+                        <td>{formatDate(job.started_at)}</td>
+                        <td>{formatDate(job.finished_at)}</td>
+                        <td>{job.error || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="admin-job-detail-grid">
+                <section className="admin-job-detail-panel" aria-label="Selected job details">
+                  <div className="admin-panel-header">
+                    <h2>Selected Job</h2>
+                    {selectedJob?.status && (
+                      <span className={`admin-job-status admin-job-status-${selectedJob.status}`}>
+                        {selectedJob.status}
+                      </span>
+                    )}
+                  </div>
+                  {selectedJob ? (
+                    <dl>
+                      <div><dt>ID</dt><dd className="mono-cell">{selectedJob.id}</dd></div>
+                      <div><dt>Type</dt><dd>{selectedJob.type}</dd></div>
+                      <div><dt>Created</dt><dd>{formatDate(selectedJob.created_at)}</dd></div>
+                      <div><dt>Started</dt><dd>{formatDate(selectedJob.started_at)}</dd></div>
+                      <div><dt>Finished</dt><dd>{formatDate(selectedJob.finished_at)}</dd></div>
+                      <div><dt>Error</dt><dd>{selectedJob.error || ''}</dd></div>
+                      <div>
+                        <dt>Payload</dt>
+                        <dd>
+                          <pre>{JSON.stringify(selectedJob.payload ?? {}, null, 2)}</pre>
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Result</dt>
+                        <dd>
+                          <pre>{JSON.stringify(selectedJob.result ?? null, null, 2)}</pre>
+                        </dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <p className="helper-text">Select or create a job to view details.</p>
+                  )}
+                </section>
+
+                <section className="admin-console-panel" aria-label="Selected job console logs">
+                  <div className="admin-panel-header">
+                    <h2>Console</h2>
+                    {logsStatus === 'loading' && <em>Refreshing...</em>}
+                  </div>
+                  {logsStatus === 'error' && <p className="helper-text notice">{logsError}</p>}
+                  <div className="admin-console-log" role="log" aria-live="polite">
+                    {selectedJob && jobLogs.length === 0 && (
+                      <div className="admin-console-empty">No logs for this job yet.</div>
+                    )}
+                    {!selectedJob && (
+                      <div className="admin-console-empty">No job selected.</div>
+                    )}
+                    {jobLogs.map((log) => (
+                      <div className={`admin-console-line admin-console-line-${log.level}`} key={log.id}>
+                        <span>{formatDate(log.created_at)}</span>
+                        <strong>{log.level}</strong>
+                        <span>{log.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
             </div>
           )}
         </div>

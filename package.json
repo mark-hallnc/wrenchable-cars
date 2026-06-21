@@ -21,7 +21,8 @@
     "data:health": "node scripts/data-health.js",
     "data:cleanup:duplicates": "node scripts/cleanup-duplicate-data.js",
     "data:audit:core": "node scripts/audit-core-repair-coverage.js",
-    "recalculate:scores": "node scripts/recalculate-wrenchability-scores.js"
+    "recalculate:scores": "node scripts/recalculate-wrenchability-scores.js",
+    "admin:worker": "node scripts/admin-worker.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.107.0",

@@ -1738,6 +1738,188 @@ button:disabled {
   gap: 0.9rem;
 }
 
+.admin-operations-section {
+  display: grid;
+  gap: 1rem;
+}
+
+.admin-operations-toolbar,
+.admin-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.admin-operations-toolbar {
+  justify-content: flex-start;
+}
+
+.admin-operations-toolbar button {
+  width: auto;
+  min-width: 0;
+}
+
+.admin-jobs-table-wrap {
+  max-height: 34vh;
+}
+
+.admin-jobs-table {
+  min-width: 980px;
+}
+
+.admin-jobs-table th {
+  padding: 0.7rem 0.65rem;
+  font-size: 0.8rem;
+}
+
+.admin-job-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  background: #f8f5ef;
+  color: #3f4956;
+  font-size: 0.74rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.admin-job-status-running {
+  border-color: rgba(168, 93, 18, 0.35);
+  background: #fff3df;
+  color: var(--color-accent-dark);
+}
+
+.admin-job-status-completed {
+  border-color: rgba(36, 122, 74, 0.3);
+  background: #ecf7ef;
+  color: var(--color-good);
+}
+
+.admin-job-status-failed,
+.admin-job-status-cancelled {
+  border-color: rgba(164, 58, 47, 0.3);
+  background: #fff0ed;
+  color: var(--color-danger);
+}
+
+.admin-job-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.admin-job-detail-panel,
+.admin-console-panel {
+  min-width: 0;
+}
+
+.admin-panel-header {
+  margin-bottom: 0.65rem;
+}
+
+.admin-panel-header h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 1.05rem;
+}
+
+.admin-panel-header em {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.admin-job-detail-panel dl {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+}
+
+.admin-job-detail-panel div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.admin-job-detail-panel dt {
+  color: var(--color-muted);
+  font-size: 0.75rem;
+  font-weight: 900;
+}
+
+.admin-job-detail-panel dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.admin-job-detail-panel pre {
+  overflow: auto;
+  max-height: 12rem;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  padding: 0.65rem;
+  background: #f8f5ef;
+  color: #26313f;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.admin-console-log {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  overflow: auto;
+  min-height: 18rem;
+  max-height: 28rem;
+  border: 1px solid #242b35;
+  border-radius: var(--radius-card);
+  padding: 0.75rem;
+  background: #111820;
+  color: #e9eef4;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.admin-console-line {
+  display: grid;
+  grid-template-columns: minmax(8rem, 13rem) 4.5rem minmax(0, 1fr);
+  gap: 0.6rem;
+  align-items: start;
+}
+
+.admin-console-line strong {
+  color: #f1b55f;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+}
+
+.admin-console-line-success strong {
+  color: #79d29b;
+}
+
+.admin-console-line-warn strong {
+  color: #f4c56e;
+}
+
+.admin-console-line-error strong {
+  color: #ff9b8d;
+}
+
+.admin-console-empty {
+  color: #aab6c4;
+}
+
 .faq-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1846,6 +2028,10 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .admin-job-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
   .footer-links {
     flex-wrap: wrap;
   }
@@ -1915,6 +2101,11 @@ button:disabled {
   .admin-pagination {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .admin-console-line {
+    grid-template-columns: 1fr;
+    gap: 0.1rem;
   }
 
   .search-panel,
