@@ -4,6 +4,7 @@ import path from 'node:path';
 import { getDataHealth } from './data-health.js';
 import { getDataStatus } from './data-status.js';
 import { recalculateScores } from './recalculate-wrenchability-scores.js';
+import { runOpenLaborQueue } from './run-openlabor-queue.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -56,6 +57,11 @@ function parseCliArgs(argv = process.argv.slice(2)) {
 function normalizePositiveInteger(value, fallback) {
   const numericValue = Number(value);
   return Number.isFinite(numericValue) && numericValue > 0 ? Math.floor(numericValue) : fallback;
+}
+
+function normalizeNonNegativeInteger(value, fallback) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue >= 0 ? Math.floor(numericValue) : fallback;
 }
 
 export function formatError(error) {
@@ -198,6 +204,70 @@ async function processJob(job) {
           await logJob(job.id, level, message, data);
         },
       });
+      await updateJobStatus(job.id, 'completed', {
+        result,
+        error: null,
+        finished_at: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (job.type === 'process_queue') {
+      const limit = normalizePositiveInteger(job.payload?.limit, 25);
+      const minRateLimitRemaining = normalizeNonNegativeInteger(job.payload?.minRateLimitRemaining, 10);
+      const recalculateAfter = job.payload?.recalculateAfter !== false;
+      await logJob(job.id, 'info', 'Starting queue processing...', {
+        limit,
+        minRateLimitRemaining,
+        recalculateAfter,
+      });
+
+      const queueSummary = await runOpenLaborQueue({
+        limit,
+        minRateLimitRemaining,
+        logger: async (level, message, data) => {
+          await logJob(job.id, level, message, data);
+        },
+      });
+
+      let recalculationSummary = null;
+
+      if (recalculateAfter) {
+        await logJob(job.id, 'info', 'Queue processing finished. Starting score recalculation...');
+        recalculationSummary = await recalculateScores({
+          logger: async (level, message, data) => {
+            await logJob(job.id, level, message, data);
+          },
+        });
+        await logJob(job.id, 'success', 'Score recalculation completed', recalculationSummary);
+      } else {
+        await logJob(job.id, 'info', 'Skipping score recalculation because recalculateAfter is false.');
+      }
+
+      const result = {
+        queue: {
+          attempted: queueSummary.attempted,
+          completed: queueSummary.completed,
+          skipped: queueSummary.skipped,
+          failed: queueSummary.failed,
+          stoppedEarly: queueSummary.stoppedEarly,
+          remainingDailyRateLimit: queueSummary.rateLimitRemaining,
+          stopReason: queueSummary.stopReason,
+        },
+        recalculation: {
+          ran: recalculateAfter,
+          vehicleScoresRecalculated: recalculationSummary?.vehicleScoresRecalculated ?? 0,
+          repairScoresUpserted: recalculationSummary?.repairScoresUpserted ?? 0,
+          summary: recalculationSummary,
+        },
+      };
+
+      await logJob(
+        job.id,
+        queueSummary.failed > 0 ? 'warn' : 'success',
+        'Process queue job completed',
+        result,
+      );
       await updateJobStatus(job.id, 'completed', {
         result,
         error: null,

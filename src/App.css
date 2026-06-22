@@ -1761,6 +1761,30 @@ button:disabled {
   min-width: 0;
 }
 
+.admin-queue-controls {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.5fr) minmax(180px, 0.75fr) minmax(240px, 1fr);
+  gap: 0.75rem;
+  align-items: end;
+}
+
+.admin-queue-controls input[type="number"] {
+  min-height: 2.55rem;
+  font-size: 0.9rem;
+}
+
+.admin-checkbox-label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.55rem;
+}
+
+.admin-checkbox-label input {
+  width: auto;
+}
+
 .admin-worker-helper-panel {
   display: flex;
   flex-wrap: wrap;
@@ -2048,6 +2072,10 @@ button:disabled {
 
   .admin-filter-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-queue-controls {
+    grid-template-columns: 1fr;
   }
 
   .admin-detail-row dl {

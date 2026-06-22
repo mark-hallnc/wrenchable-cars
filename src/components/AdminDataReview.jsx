@@ -119,6 +119,9 @@ export default function AdminDataReview({
   const [logsError, setLogsError] = useState('')
   const [isCreatingJob, setIsCreatingJob] = useState(false)
   const [operationNotice, setOperationNotice] = useState('')
+  const [queueLimit, setQueueLimit] = useState('25')
+  const [queueMinRateLimitRemaining, setQueueMinRateLimitRemaining] = useState('10')
+  const [queueRecalculateAfter, setQueueRecalculateAfter] = useState(true)
 
   const visibleRows = useMemo(() => {
     const searchText = filters.search.trim().toLowerCase()
@@ -601,6 +604,48 @@ export default function AdminDataReview({
     }
   }
 
+  const createProcessQueueJob = async () => {
+    setIsCreatingJob(true)
+    setJobsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const limit = Number(queueLimit)
+      const minRateLimitRemaining = Number(queueMinRateLimitRemaining)
+      const { data, error: createError } = await supabase
+        .from('admin_jobs')
+        .insert({
+          type: 'process_queue',
+          payload: {
+            source: 'admin_ui',
+            limit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 25,
+            minRateLimitRemaining: Number.isFinite(minRateLimitRemaining) && minRateLimitRemaining >= 0
+              ? Math.floor(minRateLimitRemaining)
+              : 10,
+            recalculateAfter: queueRecalculateAfter,
+          },
+        })
+        .select('id, type, status, payload, result, error, created_at, started_at, finished_at, updated_at')
+        .single()
+
+      if (createError) throw createError
+
+      setSelectedJobId(data.id)
+      setJobLogs([])
+      setOperationNotice('Job queued. Keep npm.cmd run admin:worker running locally to process it.')
+      await loadJobs(data.id)
+      await loadJobLogs(data.id)
+    } catch (createError) {
+      console.error('Error creating process queue job:', createError)
+      setJobsError(createError instanceof Error ? createError.message : 'Unable to create process queue job.')
+    } finally {
+      setIsCreatingJob(false)
+    }
+  }
+
   if (!isUnlocked) {
     return (
       <main id="top">
@@ -902,6 +947,9 @@ export default function AdminDataReview({
                 <button type="button" onClick={createDataHealthJob} disabled={isCreatingJob}>
                   Data Health
                 </button>
+                <button type="button" onClick={createProcessQueueJob} disabled={isCreatingJob}>
+                  Process Queue
+                </button>
                 <button className="secondary-button" type="button" onClick={loadJobs}>
                   Refresh Jobs
                 </button>
@@ -913,6 +961,37 @@ export default function AdminDataReview({
                 >
                   Refresh Logs
                 </button>
+              </div>
+
+              <div className="admin-queue-controls" aria-label="Process queue options">
+                <label>
+                  Limit
+                  <input
+                    min="1"
+                    step="1"
+                    type="number"
+                    value={queueLimit}
+                    onChange={(event) => setQueueLimit(event.target.value)}
+                  />
+                </label>
+                <label>
+                  Minimum Rate Limit Remaining
+                  <input
+                    min="0"
+                    step="1"
+                    type="number"
+                    value={queueMinRateLimitRemaining}
+                    onChange={(event) => setQueueMinRateLimitRemaining(event.target.value)}
+                  />
+                </label>
+                <label className="admin-checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={queueRecalculateAfter}
+                    onChange={(event) => setQueueRecalculateAfter(event.target.checked)}
+                  />
+                  Recalculate scores after processing
+                </label>
               </div>
 
               <div className="admin-worker-helper-panel">

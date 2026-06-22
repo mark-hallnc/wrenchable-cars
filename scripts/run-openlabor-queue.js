@@ -70,6 +70,21 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
+async function emitLog({ logger, log, level = 'info', message, data = null }) {
+  if (log) {
+    const consoleMethod = level === 'error'
+      ? 'error'
+      : level === 'warn'
+        ? 'warn'
+        : 'log';
+    console[consoleMethod](message);
+  }
+
+  if (typeof logger === 'function') {
+    await logger(level, message, data);
+  }
+}
+
 async function fetchPendingQueueRows(limit) {
   const baseColumns = 'id, year, make, model, make_slug, model_slug, engine, engine_slug, priority, created_at';
   const query = (columns) => supabase
@@ -153,6 +168,7 @@ export async function runOpenLaborQueue(options = {}) {
     0,
   );
   const log = options.log ?? true;
+  const logger = typeof options.logger === 'function' ? options.logger : null;
 
   if (resetFailedRecent > 0) {
     const resetSummary = await resetFailedQueueRows(resetFailedRecent);
@@ -183,6 +199,13 @@ export async function runOpenLaborQueue(options = {}) {
   }
 
   const rows = pendingRows ?? [];
+  await emitLog({
+    logger,
+    log,
+    message: `Pending queue rows found: ${rows.length}`,
+    data: { pendingQueueRowsFound: rows.length, limit, minRateLimitRemaining },
+  });
+
   let attempted = 0;
   let completed = 0;
   let skipped = 0;
@@ -194,10 +217,21 @@ export async function runOpenLaborQueue(options = {}) {
   for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
     attempted += 1;
+    const vehicleLabel = formatQueueVehicle(row);
 
-    if (log) {
-      console.log(`Processing queue row ${row.id} (${row.year} ${row.make} ${row.model})...`);
-    }
+    await emitLog({
+      logger,
+      log,
+      message: `Processing queue row ${row.id}: ${vehicleLabel}`,
+      data: {
+        queueId: row.id,
+        year: row.year,
+        make: row.make,
+        model: row.model,
+        engine: row.engine,
+        source_engine_slug: row.engine_slug,
+      },
+    });
 
     try {
       const result = await importOpenLaborVehicle({
@@ -218,34 +252,72 @@ export async function runOpenLaborQueue(options = {}) {
 
       if (result.skipped) {
         skipped += 1;
+        await emitLog({
+          logger,
+          log,
+          message: `Queue row skipped: ${vehicleLabel}`,
+          data: { queueId: row.id, skipped },
+        });
       } else {
         completed += 1;
+        await emitLog({
+          logger,
+          log,
+          message: `Queue row completed: ${vehicleLabel}`,
+          data: { queueId: row.id, completed },
+        });
       }
 
       if (result.rateLimitRemaining !== undefined && result.rateLimitRemaining !== null && result.rateLimitRemaining !== '') {
         rateLimitRemaining = Number(result.rateLimitRemaining);
+        await emitLog({
+          logger,
+          log,
+          message: `Open Labor daily rate limit remaining: ${rateLimitRemaining}`,
+          data: { rateLimitRemaining },
+        });
 
         if (Number.isFinite(rateLimitRemaining) && rateLimitRemaining < minRateLimitRemaining) {
           stoppedEarly = true;
           stopReason = `Stopping early because Open Labor daily rate limit is low: ${rateLimitRemaining} remaining.`;
 
-          if (log) {
-            console.log(stopReason);
-          }
+          await emitLog({
+            logger,
+            log,
+            level: 'warn',
+            message: stopReason,
+            data: { rateLimitRemaining, minRateLimitRemaining },
+          });
 
           break;
         }
       }
     } catch (error) {
       failed += 1;
+      const errorText = formatError(error);
+      await emitLog({
+        logger,
+        log,
+        level: 'warn',
+        message: `Queue row failed: ${vehicleLabel}`,
+        data: {
+          queueId: row.id,
+          year: row.year,
+          make: row.make,
+          model: row.model,
+          engine: row.engine ?? 'Base / unspecified engine',
+          source_engine_slug: row.engine_slug ?? 'none',
+          error: errorText,
+        },
+      });
+
       if (log) {
-        console.error(`Queue row ${row.id} failed: ${formatQueueVehicle(row)}`);
         console.error(`year: ${row.year}`);
         console.error(`make: ${row.make}`);
         console.error(`model: ${row.model}`);
         console.error(`engine: ${row.engine ?? 'Base / unspecified engine'}`);
         console.error(`source_engine_slug: ${row.engine_slug ?? 'none'}`);
-        console.error(formatError(error));
+        console.error(errorText);
       }
     }
 
@@ -280,6 +352,14 @@ export async function runOpenLaborQueue(options = {}) {
       console.log(stopReason);
     }
   }
+
+  await emitLog({
+    logger,
+    log: false,
+    level: failed > 0 ? 'warn' : 'success',
+    message: `Queue run complete: attempted ${attempted}, completed ${completed}, skipped ${skipped}, failed ${failed}`,
+    data: summary,
+  });
 
   return summary;
 }
