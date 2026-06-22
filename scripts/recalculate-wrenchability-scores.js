@@ -55,6 +55,11 @@ function parseCliArgs(argv = process.argv.slice(2)) {
   return options;
 }
 
+function normalizePositiveInteger(value, fallback) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.floor(numericValue) : fallback;
+}
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -269,6 +274,79 @@ function chooseLaborEstimateWinner(existingRow, nextRow) {
   return String(nextRow.id).localeCompare(String(existingRow.id)) < 0 ? nextRow : existingRow;
 }
 
+async function fetchDedupedLaborEstimatesInPages({ pageSize, emitLog }) {
+  const dedupedRowsByKey = new Map();
+  let duplicateCount = 0;
+  let validLaborEstimatesSeen = 0;
+  let pageNumber = 0;
+  let start = 0;
+
+  while (true) {
+    pageNumber += 1;
+    const end = start + pageSize - 1;
+    const { data, error } = await supabase
+      .from('labor_estimates')
+      .select('id, vehicle_id, repair_task_id, labor_hours, source')
+      .order('id', { ascending: true })
+      .range(start, end);
+
+    if (error) {
+      throw new Error(
+        [
+          `Failed to fetch labor_estimates page ${pageNumber} (${start}-${end}):`,
+          formatSupabaseError(error),
+        ].join('\n'),
+      );
+    }
+
+    const pageRows = data ?? [];
+
+    if (pageRows.length === 0) {
+      break;
+    }
+
+    const validPageRows = pageRows.filter((row) =>
+      row.source === 'openlabor'
+      && row.labor_hours !== null
+      && Number(row.labor_hours) > 0,
+    );
+    validLaborEstimatesSeen += validPageRows.length;
+
+    for (const row of validPageRows) {
+      const key = `${row.vehicle_id}:${row.repair_task_id}`;
+
+      if (!dedupedRowsByKey.has(key)) {
+        dedupedRowsByKey.set(key, row);
+        continue;
+      }
+
+      duplicateCount += 1;
+      dedupedRowsByKey.set(key, chooseLaborEstimateWinner(dedupedRowsByKey.get(key), row));
+    }
+
+    await emitLog(
+      'info',
+      `Processed labor estimate page ${pageNumber}; total processed: ${validLaborEstimatesSeen}; repair_scores upserted so far: 0`,
+      {
+        pageNumber,
+        from: start,
+        to: end,
+        pageRows: pageRows.length,
+        validLaborEstimatesProcessed: validLaborEstimatesSeen,
+        repairScoresUpsertedSoFar: 0,
+      },
+    );
+
+    start += pageRows.length;
+  }
+
+  return {
+    rows: [...dedupedRowsByKey.values()],
+    duplicateCount,
+    validLaborEstimatesSeen,
+  };
+}
+
 function chooseVehicleScoreWinner(existingRow, nextRow) {
   const existingHasOverallScore = hasValidNumber(existingRow.overall_score);
   const nextHasOverallScore = hasValidNumber(nextRow.overall_score);
@@ -328,25 +406,13 @@ export async function recalculateScores(options = {}) {
     }
   };
   const debugVehicleId = options.vehicleId ? String(options.vehicleId) : '';
-  const [rawLaborEstimates, repairTasks, vehicles] = await Promise.all([
-    selectAllRows(
-      'labor_estimates',
-      'id, vehicle_id, repair_task_id, labor_hours, source_operation_name, source_notes',
-      [
-        { column: 'source', operator: 'eq', value: 'openlabor' },
-        { column: 'labor_hours', operator: 'notNull' },
-        { column: 'labor_hours', operator: 'gt', value: 0 },
-      ],
-    ),
+  const pageSize = normalizePositiveInteger(options.pageSize, 5000);
+  await emitLog('info', `Fetching labor_estimates in pages of ${pageSize}`, { pageSize });
+  const [dedupedLaborEstimates, repairTasks, vehicles] = await Promise.all([
+    fetchDedupedLaborEstimatesInPages({ pageSize, emitLog }),
     selectAllRows('repair_tasks', 'id, name, category, source_job_slug, default_weight'),
     selectAllRows('vehicles', 'id, year, make, model, engine, source_engine_slug'),
   ]);
-
-  const dedupedLaborEstimates = dedupeByKey(
-    rawLaborEstimates,
-    (row) => `${row.vehicle_id}:${row.repair_task_id}`,
-    chooseLaborEstimateWinner,
-  );
   const laborEstimates = dedupedLaborEstimates.rows;
   const laborEstimatesByRepairTask = new Map();
   const laborEstimateCountByVehicleId = new Map();

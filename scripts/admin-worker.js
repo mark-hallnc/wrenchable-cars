@@ -51,6 +51,11 @@ function parseCliArgs(argv = process.argv.slice(2)) {
   return args;
 }
 
+function normalizePositiveInteger(value, fallback) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.floor(numericValue) : fallback;
+}
+
 export function formatError(error) {
   if (!error) return 'Unknown error';
 
@@ -152,8 +157,10 @@ async function processJob(job) {
     }
 
     if (job.type === 'recalculate_scores') {
+      const pageSize = normalizePositiveInteger(job.payload?.pageSize, 5000);
       await logJob(job.id, 'info', 'Starting score recalculation...', job.payload ?? {});
       const result = await recalculateScores({
+        pageSize,
         logger: async (level, message, data) => {
           await logJob(job.id, level, message, data);
         },

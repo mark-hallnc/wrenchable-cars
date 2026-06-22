@@ -69,14 +69,7 @@ async function selectAllRows(tableName, selectColumns) {
       .from(tableName)
       .select(selectColumns);
 
-    if (tableName === 'repair_scores') {
-      query = query
-        .order('vehicle_id', { ascending: true })
-        .order('repair_task_id', { ascending: true })
-        .order('id', { ascending: true });
-    } else {
-      query = query.order('id', { ascending: true });
-    }
+    query = query.order('id', { ascending: true });
 
     const { data, error } = await query.range(start, start + pageSize - 1);
 
@@ -85,13 +78,12 @@ async function selectAllRows(tableName, selectColumns) {
     }
 
     const pageRows = data ?? [];
-    rows.push(...pageRows);
-
-    if (pageRows.length < pageSize) {
+    if (pageRows.length === 0) {
       break;
     }
 
-    start += pageSize;
+    rows.push(...pageRows);
+    start += pageRows.length;
   }
 
   return rows;

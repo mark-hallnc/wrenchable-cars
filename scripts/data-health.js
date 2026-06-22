@@ -143,14 +143,7 @@ async function selectAllRows(tableName, selectColumns, filters = {}) {
       .from(tableName)
       .select(selectColumns);
 
-    if (tableName === 'repair_scores' || tableName === 'labor_estimates') {
-      query = query
-        .order('vehicle_id', { ascending: true })
-        .order('repair_task_id', { ascending: true })
-        .order('id', { ascending: true });
-    } else {
-      query = query.order('id', { ascending: true });
-    }
+    query = query.order('id', { ascending: true });
 
     query = query.range(start, start + pageSize - 1);
 
@@ -165,11 +158,10 @@ async function selectAllRows(tableName, selectColumns, filters = {}) {
     }
 
     const pageRows = data ?? [];
+    if (pageRows.length === 0) break;
+
     rows.push(...pageRows);
-
-    if (pageRows.length < pageSize) break;
-
-    start += pageSize;
+    start += pageRows.length;
   }
 
   return rows;
@@ -269,20 +261,18 @@ async function buildHealthReport(options) {
   const [
     vehicles,
     vehicleScores,
-    repairScores,
-    laborEstimates,
     repairTasks,
     queueRows,
     totalVehicleCount,
   ] = await Promise.all([
     selectAllRows('vehicles', 'id, year, make, model, engine, source_engine_slug', options),
     selectAllRows('vehicle_scores', 'id, vehicle_id'),
-    selectAllRows('repair_scores', 'id, vehicle_id, repair_task_id, wrenchability_score'),
-    selectAllRows('labor_estimates', 'id, vehicle_id, repair_task_id'),
     selectAllRows('repair_tasks', 'id, name, source_job_slug'),
     selectAllRows('openlabor_import_queue', 'id, status'),
     countRows('vehicles', options),
   ]);
+  const repairScores = await selectAllRows('repair_scores', 'id, vehicle_id, repair_task_id, wrenchability_score');
+  const laborEstimates = await selectAllRows('labor_estimates', 'id, vehicle_id, repair_task_id');
 
   const filteredVehicleIds = new Set(vehicles.map((vehicle) => String(vehicle.id)));
   const vehicleScoresByVehicleId = new Set(vehicleScores.map((score) => String(score.vehicle_id)));
