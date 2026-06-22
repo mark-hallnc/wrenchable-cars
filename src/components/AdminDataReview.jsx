@@ -531,6 +531,76 @@ export default function AdminDataReview({
     }
   }
 
+  const createDataStatusJob = async () => {
+    setIsCreatingJob(true)
+    setJobsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data, error: createError } = await supabase
+        .from('admin_jobs')
+        .insert({
+          type: 'data_status',
+          payload: {
+            source: 'admin_ui',
+          },
+        })
+        .select('id, type, status, payload, result, error, created_at, started_at, finished_at, updated_at')
+        .single()
+
+      if (createError) throw createError
+
+      setSelectedJobId(data.id)
+      setJobLogs([])
+      setOperationNotice('Job queued. Run npm.cmd run admin:worker -- --once locally to process it.')
+      await loadJobs(data.id)
+      await loadJobLogs(data.id)
+    } catch (createError) {
+      console.error('Error creating data status job:', createError)
+      setJobsError(createError instanceof Error ? createError.message : 'Unable to create data status job.')
+    } finally {
+      setIsCreatingJob(false)
+    }
+  }
+
+  const createDataHealthJob = async () => {
+    setIsCreatingJob(true)
+    setJobsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const { data, error: createError } = await supabase
+        .from('admin_jobs')
+        .insert({
+          type: 'data_health',
+          payload: {
+            source: 'admin_ui',
+          },
+        })
+        .select('id, type, status, payload, result, error, created_at, started_at, finished_at, updated_at')
+        .single()
+
+      if (createError) throw createError
+
+      setSelectedJobId(data.id)
+      setJobLogs([])
+      setOperationNotice('Job queued. Run npm.cmd run admin:worker -- --once locally to process it.')
+      await loadJobs(data.id)
+      await loadJobLogs(data.id)
+    } catch (createError) {
+      console.error('Error creating data health job:', createError)
+      setJobsError(createError instanceof Error ? createError.message : 'Unable to create data health job.')
+    } finally {
+      setIsCreatingJob(false)
+    }
+  }
+
   if (!isUnlocked) {
     return (
       <main id="top">
@@ -825,6 +895,12 @@ export default function AdminDataReview({
                 </button>
                 <button type="button" onClick={createRecalculateScoresJob} disabled={isCreatingJob}>
                   Recalculate Scores
+                </button>
+                <button type="button" onClick={createDataStatusJob} disabled={isCreatingJob}>
+                  Data Status
+                </button>
+                <button type="button" onClick={createDataHealthJob} disabled={isCreatingJob}>
+                  Data Health
                 </button>
                 <button className="secondary-button" type="button" onClick={loadJobs}>
                   Refresh Jobs

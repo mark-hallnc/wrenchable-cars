@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   COMMON_OWNERSHIP_REPAIR_COUNT,
   COMMON_OWNERSHIP_REPAIR_SLUGS,
@@ -507,9 +508,64 @@ async function buildHealthReport(options) {
   };
 }
 
+async function emitDataHealthLogs(report, logger) {
+  if (!logger) return;
+
+  await logger('info', 'Data health report started');
+  await logger(
+    report.scoreHealth.vehiclesMissingVehicleScores > 0 ? 'warn' : 'info',
+    `Vehicles missing vehicle_scores: ${report.scoreHealth.vehiclesMissingVehicleScores}`,
+    { vehiclesMissingVehicleScores: report.scoreHealth.vehiclesMissingVehicleScores },
+  );
+  await logger(
+    report.scoreHealth.missingScoreWithCommonOwnershipRepairScores > 0 ? 'warn' : 'info',
+    `Missing score but has common ownership repair scores: ${report.scoreHealth.missingScoreWithCommonOwnershipRepairScores}`,
+    {
+      missingScoreWithCommonOwnershipRepairScores:
+        report.scoreHealth.missingScoreWithCommonOwnershipRepairScores,
+    },
+  );
+  await logger(
+    report.duplicates.vehicles > 0 ? 'warn' : 'info',
+    `Duplicate vehicles: ${report.duplicates.vehicles}`,
+    { duplicateVehicles: report.duplicates.vehicles },
+  );
+  await logger(
+    report.duplicates.repairScores > 0 ? 'warn' : 'info',
+    `Duplicate repair_scores: ${report.duplicates.repairScores}`,
+    { duplicateRepairScores: report.duplicates.repairScores },
+  );
+  await logger(
+    report.duplicates.laborEstimates > 0 ? 'warn' : 'info',
+    `Duplicate labor_estimates: ${report.duplicates.laborEstimates}`,
+    { duplicateLaborEstimates: report.duplicates.laborEstimates },
+  );
+
+  const highCoverageBucket = `${COMMON_OWNERSHIP_REPAIR_COUNT - 4}-${COMMON_OWNERSHIP_REPAIR_COUNT}`;
+  await logger('info', `${highCoverageBucket} common repairs: ${report.commonRepairCoverage[highCoverageBucket] ?? 0}`, {
+    bucket: highCoverageBucket,
+    count: report.commonRepairCoverage[highCoverageBucket] ?? 0,
+  });
+  await logger('success', 'Health report complete', report);
+}
+
+export async function getDataHealth({ logger = null, limit = 10, ...options } = {}) {
+  const report = await buildHealthReport({ ...options, limit });
+  const result = {
+    ...report,
+    duplicateChecks: report.duplicates,
+    problemExamples: report.examples,
+    possibleCommonRepairAliasesNotCurrentlyCounted: report.possibleCommonRepairAliases,
+  };
+
+  await emitDataHealthLogs(result, logger);
+
+  return result;
+}
+
 async function main() {
   const options = parseCliArgs();
-  const report = await buildHealthReport(options);
+  const report = await getDataHealth(options);
 
   if (options.json) {
     console.log(JSON.stringify(report, null, 2));
@@ -519,8 +575,13 @@ async function main() {
   printReport(report);
 }
 
-main().catch((error) => {
-  console.error('Data health failed:');
-  console.error(formatError(error));
-  process.exitCode = 1;
-});
+const isDirectExecution = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isDirectExecution) {
+  main().catch((error) => {
+    console.error('Data health failed:');
+    console.error(formatError(error));
+    process.exitCode = 1;
+  });
+}

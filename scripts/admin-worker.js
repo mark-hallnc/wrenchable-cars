@@ -1,6 +1,8 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { getDataHealth } from './data-health.js';
+import { getDataStatus } from './data-status.js';
 import { recalculateScores } from './recalculate-wrenchability-scores.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -166,6 +168,36 @@ async function processJob(job) {
         },
       });
       await logJob(job.id, 'success', 'Score recalculation completed', result);
+      await updateJobStatus(job.id, 'completed', {
+        result,
+        error: null,
+        finished_at: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (job.type === 'data_status') {
+      await logJob(job.id, 'info', 'Starting data status report...', job.payload ?? {});
+      const result = await getDataStatus({
+        logger: async (level, message, data) => {
+          await logJob(job.id, level, message, data);
+        },
+      });
+      await updateJobStatus(job.id, 'completed', {
+        result,
+        error: null,
+        finished_at: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (job.type === 'data_health') {
+      await logJob(job.id, 'info', 'Starting data health report...', job.payload ?? {});
+      const result = await getDataHealth({
+        logger: async (level, message, data) => {
+          await logJob(job.id, level, message, data);
+        },
+      });
       await updateJobStatus(job.id, 'completed', {
         result,
         error: null,

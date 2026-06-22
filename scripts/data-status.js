@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { isCommonOwnershipRepairSlug } from '../src/lib/commonRepairs.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
@@ -105,7 +106,80 @@ function printExamples(rows) {
   }
 }
 
-async function main() {
+function getVehicleExample(vehicle) {
+  return {
+    id: vehicle?.id ?? null,
+    year: vehicle?.year ?? null,
+    make: vehicle?.make ?? null,
+    model: vehicle?.model ?? null,
+    engine: vehicle ? getVehicleConfiguration(vehicle) : null,
+  };
+}
+
+function printDataStatusReport(report) {
+  console.log('Wrenchable Cars data status');
+
+  printSection('Counts');
+  console.log(`total vehicles: ${report.counts.totalVehicles}`);
+  console.log(`engine-specific vehicles: ${report.counts.engineSpecificVehicles}`);
+  console.log(`generic vehicles: ${report.counts.genericVehicles}`);
+  console.log(`vehicle_scores: ${report.counts.vehicleScores}`);
+  console.log(`repair_scores: ${report.counts.repairScores}`);
+  console.log(`labor_estimates: ${report.counts.laborEstimates}`);
+  console.log(`repair_tasks: ${report.counts.repairTasks}`);
+  console.log(`openlabor_import_queue: ${report.counts.openlaborImportQueue}`);
+
+  printSection('Queue status');
+  for (const status of KNOWN_QUEUE_STATUSES) {
+    console.log(`${status}: ${report.queueStatus[status] ?? 0}`);
+  }
+
+  printSection('Vehicles missing scores');
+  console.log(`count: ${report.vehiclesMissingScores.count}`);
+  console.log(`with exact common repair scores: ${report.vehiclesMissingScores.withExactCommonRepairScores}`);
+  console.log(`with zero exact common repair scores: ${report.vehiclesMissingScores.withZeroExactCommonRepairScores}`);
+  printExamples(report.vehiclesMissingScores.exampleVehicles);
+
+  printSection('Scored vehicles with zero repair scores');
+  console.log(`count: ${report.scoredVehiclesWithZeroRepairScores.count}`);
+  printExamples(report.scoredVehiclesWithZeroRepairScores.exampleVehicles);
+
+  printSection('Top make/model groups');
+  for (const entry of report.topMakeModelGroups) {
+    console.log(`${entry.group}: ${entry.count}`);
+  }
+
+  printSection('Top year/make/model engine variant groups');
+  for (const entry of report.topYearMakeModelEngineVariantGroups) {
+    console.log(`${entry.group}: ${entry.variantCount} variants`);
+  }
+
+  printSection('Recommendation');
+  console.log(report.recommendation);
+}
+
+async function emitDataStatusLogs(report, logger) {
+  if (!logger) return;
+
+  await logger('info', 'Data status report started');
+  await logger('info', `Total vehicles: ${report.counts.totalVehicles}`, { totalVehicles: report.counts.totalVehicles });
+  await logger('info', `Vehicle scores: ${report.counts.vehicleScores}`, { vehicleScores: report.counts.vehicleScores });
+
+  const pendingQueueRows = report.queueStatus.pending ?? 0;
+  const failedQueueRows = report.queueStatus.failed ?? 0;
+  await logger(pendingQueueRows > 0 ? 'warn' : 'info', `Pending queue rows: ${pendingQueueRows}`, { pendingQueueRows });
+  await logger(failedQueueRows > 0 ? 'warn' : 'info', `Failed queue rows: ${failedQueueRows}`, { failedQueueRows });
+
+  await logger(
+    report.vehiclesMissingScores.count > 0 ? 'warn' : 'info',
+    `Vehicles missing scores: ${report.vehiclesMissingScores.count}`,
+    { vehiclesMissingScores: report.vehiclesMissingScores.count },
+  );
+  await logger('info', `Recommendation: ${report.recommendation}`, { recommendation: report.recommendation });
+  await logger('success', 'Data status report complete', report);
+}
+
+export async function getDataStatus({ logger = null, limit = 10 } = {}) {
   const [
     vehicles,
     vehicleScores,
@@ -179,58 +253,62 @@ async function main() {
     [...variantsByYearMakeModel.entries()].map(([group, variants]) => [group, variants.size]),
   );
 
-  console.log('Wrenchable Cars data status');
-
-  printSection('Counts');
-  console.log(`total vehicles: ${vehicles.length}`);
-  console.log(`engine-specific vehicles: ${engineSpecificVehicles.length}`);
-  console.log(`generic vehicles: ${genericVehicles.length}`);
-  console.log(`vehicle_scores: ${vehicleScores.length}`);
-  console.log(`repair_scores: ${repairScores.length}`);
-  console.log(`labor_estimates: ${laborEstimates.length}`);
-  console.log(`repair_tasks: ${repairTasks.length}`);
-  console.log(`openlabor_import_queue: ${queueRows.length}`);
-
-  printSection('Queue status');
-  for (const [status, count] of queueStatusCounts.entries()) {
-    console.log(`${status}: ${count}`);
-  }
-
-  printSection('Vehicles missing scores');
-  console.log(`count: ${missingScoreVehicles.length}`);
-  console.log(`with exact common repair scores: ${missingScoreVehiclesWithExactCommonScores.length}`);
-  console.log(`with zero exact common repair scores: ${missingScoreVehiclesWithZeroExactCommonScores.length}`);
-  printExamples(missingScoreVehicles);
-
-  printSection('Scored vehicles with zero repair scores');
-  console.log(`count: ${scoredVehiclesWithoutRepairScores.length}`);
-  printExamples(scoredVehiclesWithoutRepairScores);
-
-  printSection('Top make/model groups');
-  for (const [group, count] of getTopEntries(makeModelCounts)) {
-    console.log(`${group}: ${count}`);
-  }
-
-  printSection('Top year/make/model engine variant groups');
-  for (const [group, count] of getTopEntries(variantCounts)) {
-    console.log(`${group}: ${count} variants`);
-  }
-
-  printSection('Recommendation');
   const pendingQueueRows = queueStatusCounts.get('pending') ?? 0;
+  let recommendation;
 
   if (pendingQueueRows > 0) {
-    console.log('Next: npm.cmd run data:process -- --limit=25');
+    recommendation = 'Next: npm.cmd run data:process -- --limit=25';
   } else if (missingScoreVehiclesWithExactCommonScores.length > 0) {
-    console.log('Next: npm.cmd run recalculate:scores');
+    recommendation = 'Next: npm.cmd run recalculate:scores';
   } else if (missingScoreVehicles.length > 0) {
-    console.log('Database looks ready for frontend testing. Remaining missing scores have zero exact common repair scores.');
+    recommendation = 'Database looks ready for frontend testing. Remaining missing scores have zero exact common repair scores.';
   } else {
-    console.log('Database looks ready for frontend testing.');
+    recommendation = 'Database looks ready for frontend testing.';
   }
+
+  const report = {
+    counts: {
+      totalVehicles: vehicles.length,
+      engineSpecificVehicles: engineSpecificVehicles.length,
+      genericVehicles: genericVehicles.length,
+      vehicleScores: vehicleScores.length,
+      repairScores: repairScores.length,
+      laborEstimates: laborEstimates.length,
+      repairTasks: repairTasks.length,
+      openlaborImportQueue: queueRows.length,
+    },
+    queueStatus: Object.fromEntries(queueStatusCounts.entries()),
+    vehiclesMissingScores: {
+      count: missingScoreVehicles.length,
+      withExactCommonRepairScores: missingScoreVehiclesWithExactCommonScores.length,
+      withZeroExactCommonRepairScores: missingScoreVehiclesWithZeroExactCommonScores.length,
+      examples: missingScoreVehicles.slice(0, limit).map(getVehicleExample),
+      exampleVehicles: missingScoreVehicles.slice(0, limit),
+    },
+    scoredVehiclesWithZeroRepairScores: {
+      count: scoredVehiclesWithoutRepairScores.length,
+      examples: scoredVehiclesWithoutRepairScores.slice(0, limit).map(getVehicleExample),
+      exampleVehicles: scoredVehiclesWithoutRepairScores.slice(0, limit),
+    },
+    topMakeModelGroups: getTopEntries(makeModelCounts, limit).map(([group, count]) => ({ group, count })),
+    topYearMakeModelEngineVariantGroups: getTopEntries(variantCounts, limit).map(([group, variantCount]) => ({
+      group,
+      variantCount,
+    })),
+    recommendation,
+  };
+
+  await emitDataStatusLogs(report, logger);
+
+  return report;
 }
 
-main().catch((error) => {
-  console.error(`Data status failed: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+const isDirectExecution = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isDirectExecution) {
+  getDataStatus().then(printDataStatusReport).catch((error) => {
+    console.error(`Data status failed: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
+}
