@@ -5,6 +5,7 @@ import { getDataHealth } from './data-health.js';
 import { getDataStatus } from './data-status.js';
 import { recalculateScores } from './recalculate-wrenchability-scores.js';
 import { runOpenLaborQueue } from './run-openlabor-queue.js';
+import { seedOpenLaborEngineBatch } from './seed-openlabor-engine-batch.js';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -62,6 +63,11 @@ function normalizePositiveInteger(value, fallback) {
 function normalizeNonNegativeInteger(value, fallback) {
   const numericValue = Number(value);
   return Number.isFinite(numericValue) && numericValue >= 0 ? Math.floor(numericValue) : fallback;
+}
+
+function normalizeText(value, fallback = '') {
+  const text = String(value ?? '').trim();
+  return text || fallback;
 }
 
 export function formatError(error) {
@@ -268,6 +274,35 @@ async function processJob(job) {
         'Process queue job completed',
         result,
       );
+      await updateJobStatus(job.id, 'completed', {
+        result,
+        error: null,
+        finished_at: new Date().toISOString(),
+      });
+      return;
+    }
+
+    if (job.type === 'seed_vehicles') {
+      const currentYear = new Date().getFullYear();
+      const options = {
+        category: normalizeText(job.payload?.category, 'all'),
+        startYear: normalizePositiveInteger(job.payload?.startYear, 2010),
+        endYear: normalizePositiveInteger(job.payload?.endYear, currentYear),
+        maxQueueRows: normalizeNonNegativeInteger(job.payload?.maxQueueRows, 250),
+        delayMs: normalizeNonNegativeInteger(job.payload?.delayMs, 250),
+        make: normalizeText(job.payload?.make, ''),
+        model: normalizeText(job.payload?.model, ''),
+        dryRun: job.payload?.dryRun === true,
+      };
+
+      await logJob(job.id, 'info', 'Starting vehicle seed job...', options);
+      const result = await seedOpenLaborEngineBatch({
+        ...options,
+        logger: async (level, message, data) => {
+          await logJob(job.id, level, message, data);
+        },
+      });
+      await logJob(job.id, result.failedCount > 0 ? 'warn' : 'success', 'Vehicle seed job complete', result);
       await updateJobStatus(job.id, 'completed', {
         result,
         error: null,

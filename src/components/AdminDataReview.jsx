@@ -122,6 +122,14 @@ export default function AdminDataReview({
   const [queueLimit, setQueueLimit] = useState('25')
   const [queueMinRateLimitRemaining, setQueueMinRateLimitRemaining] = useState('10')
   const [queueRecalculateAfter, setQueueRecalculateAfter] = useState(true)
+  const [seedCategory, setSeedCategory] = useState('all')
+  const [seedStartYear, setSeedStartYear] = useState('2010')
+  const [seedEndYear, setSeedEndYear] = useState('2024')
+  const [seedMaxQueueRows, setSeedMaxQueueRows] = useState('250')
+  const [seedDelayMs, setSeedDelayMs] = useState('250')
+  const [seedMake, setSeedMake] = useState('')
+  const [seedModel, setSeedModel] = useState('')
+  const [seedDryRun, setSeedDryRun] = useState(false)
 
   const visibleRows = useMemo(() => {
     const searchText = filters.search.trim().toLowerCase()
@@ -646,6 +654,53 @@ export default function AdminDataReview({
     }
   }
 
+  const createSeedVehiclesJob = async () => {
+    setIsCreatingJob(true)
+    setJobsError('')
+
+    try {
+      if (!supabase) {
+        throw new Error('Supabase is not configured.')
+      }
+
+      const startYear = Number(seedStartYear)
+      const endYear = Number(seedEndYear)
+      const maxQueueRows = Number(seedMaxQueueRows)
+      const delayMs = Number(seedDelayMs)
+      const { data, error: createError } = await supabase
+        .from('admin_jobs')
+        .insert({
+          type: 'seed_vehicles',
+          payload: {
+            source: 'admin_ui',
+            category: seedCategory || 'all',
+            startYear: Number.isFinite(startYear) ? Math.floor(startYear) : 2010,
+            endYear: Number.isFinite(endYear) ? Math.floor(endYear) : 2024,
+            maxQueueRows: Number.isFinite(maxQueueRows) && maxQueueRows >= 0 ? Math.floor(maxQueueRows) : 250,
+            delayMs: Number.isFinite(delayMs) && delayMs >= 0 ? Math.floor(delayMs) : 250,
+            make: seedMake.trim() || null,
+            model: seedModel.trim() || null,
+            dryRun: seedDryRun,
+          },
+        })
+        .select('id, type, status, payload, result, error, created_at, started_at, finished_at, updated_at')
+        .single()
+
+      if (createError) throw createError
+
+      setSelectedJobId(data.id)
+      setJobLogs([])
+      setOperationNotice('Job queued. Keep npm.cmd run admin:worker running locally to process it.')
+      await loadJobs(data.id)
+      await loadJobLogs(data.id)
+    } catch (createError) {
+      console.error('Error creating seed vehicles job:', createError)
+      setJobsError(createError instanceof Error ? createError.message : 'Unable to create seed vehicles job.')
+    } finally {
+      setIsCreatingJob(false)
+    }
+  }
+
   if (!isUnlocked) {
     return (
       <main id="top">
@@ -992,6 +1047,91 @@ export default function AdminDataReview({
                   />
                   Recalculate scores after processing
                 </label>
+              </div>
+
+              <div className="admin-seed-section">
+                <div className="admin-panel-header">
+                  <h2>Seed Vehicles</h2>
+                  <button type="button" onClick={createSeedVehiclesJob} disabled={isCreatingJob}>
+                    Seed Vehicles
+                  </button>
+                </div>
+                <div className="admin-seed-controls" aria-label="Seed vehicles options">
+                  <label>
+                    Category
+                    <select value={seedCategory} onChange={(event) => setSeedCategory(event.target.value)}>
+                      <option value="all">all</option>
+                      <option value="trucks">trucks</option>
+                      <option value="suvs">suvs</option>
+                      <option value="cars">cars</option>
+                      <option value="vans">vans</option>
+                    </select>
+                  </label>
+                  <label>
+                    Start year
+                    <input
+                      min="1980"
+                      step="1"
+                      type="number"
+                      value={seedStartYear}
+                      onChange={(event) => setSeedStartYear(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    End year
+                    <input
+                      min="1980"
+                      step="1"
+                      type="number"
+                      value={seedEndYear}
+                      onChange={(event) => setSeedEndYear(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Max queue rows
+                    <input
+                      min="0"
+                      step="1"
+                      type="number"
+                      value={seedMaxQueueRows}
+                      onChange={(event) => setSeedMaxQueueRows(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Delay ms
+                    <input
+                      min="0"
+                      step="1"
+                      type="number"
+                      value={seedDelayMs}
+                      onChange={(event) => setSeedDelayMs(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Make
+                    <input
+                      value={seedMake}
+                      onChange={(event) => setSeedMake(event.target.value)}
+                      placeholder="optional"
+                    />
+                  </label>
+                  <label>
+                    Model
+                    <input
+                      value={seedModel}
+                      onChange={(event) => setSeedModel(event.target.value)}
+                      placeholder="optional"
+                    />
+                  </label>
+                  <label className="admin-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={seedDryRun}
+                      onChange={(event) => setSeedDryRun(event.target.checked)}
+                    />
+                    Dry run
+                  </label>
+                </div>
               </div>
 
               <div className="admin-worker-helper-panel">

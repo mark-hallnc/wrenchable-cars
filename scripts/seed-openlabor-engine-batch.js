@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
 
@@ -149,6 +150,21 @@ function isEnabled(value) {
 function parseNumber(value, fallback) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+async function emitLog({ logger, log, level = 'info', message, data = null }) {
+  if (log) {
+    const consoleMethod = level === 'error'
+      ? 'error'
+      : level === 'warn'
+        ? 'warn'
+        : 'log';
+    console[consoleMethod](message);
+  }
+
+  if (typeof logger === 'function') {
+    await logger(level, message, data);
+  }
 }
 
 function parseJsonSafely(text) {
@@ -424,7 +440,7 @@ async function readCatalogResponse(response) {
   return { notFound: false, rows, rateLimit };
 }
 
-async function fetchEngineCatalog(target) {
+async function fetchEngineCatalog(target, { logger = null, log = true } = {}) {
   const url = new URL('https://openlaborproject.com/api/v1/vehicles');
   url.searchParams.set('make', target.makeSlug);
   url.searchParams.set('model', target.modelSlug);
@@ -440,7 +456,13 @@ async function fetchEngineCatalog(target) {
 
     if (response.status === 429 && attempt === 0) {
       const waitMs = getRetryAfterMilliseconds(response);
-      console.warn(`  rate limited by Open Labor; waiting ${Math.ceil(waitMs / 1000)} seconds before one retry`);
+      await emitLog({
+        logger,
+        log,
+        level: 'warn',
+        message: `Rate limited by Open Labor; waiting ${Math.ceil(waitMs / 1000)} seconds before one retry`,
+        data: { waitMs },
+      });
       await response.text();
       await sleep(waitMs);
       continue;
@@ -572,8 +594,9 @@ function targetLabel(target) {
   return `${target.year} ${target.make} ${target.model}`;
 }
 
-async function main() {
-  const options = parseCliArgs();
+export async function seedOpenLaborEngineBatch(options = {}) {
+  const log = options.log ?? true;
+  const logger = typeof options.logger === 'function' ? options.logger : null;
   const targets = buildTargets(options);
   const delayMs = Math.max(0, parseNumber(options.delayMs, DEFAULT_DELAY_MS));
   const debug = isEnabled(options.debug);
@@ -584,7 +607,37 @@ async function main() {
     : null;
   const plan = getPlan(options, targets, delayMs);
 
-  printPlan(plan);
+  if (log) printPlan(plan);
+  await emitLog({
+    logger,
+    log: false,
+    message: 'Vehicle seed job plan',
+    data: plan,
+  });
+  await emitLog({
+    logger,
+    log: false,
+    message: `Selected category: ${plan.selectedCategories.join(', ')}`,
+    data: { selectedCategories: plan.selectedCategories },
+  });
+  await emitLog({
+    logger,
+    log: false,
+    message: `Year range: ${plan.startYear}-${plan.endYear}`,
+    data: { startYear: plan.startYear, endYear: plan.endYear },
+  });
+  await emitLog({
+    logger,
+    log: false,
+    message: `Max queue rows: ${plan.maxQueueRows ?? 'none'}`,
+    data: { maxQueueRows: plan.maxQueueRows },
+  });
+  await emitLog({
+    logger,
+    log: false,
+    message: `Dry run: ${plan.dryRun ? 'yes' : 'no'}`,
+    data: { dryRun: plan.dryRun },
+  });
 
   const existingQueue = await fetchExistingQueueState();
   const failedTargets = [];
@@ -610,10 +663,15 @@ async function main() {
     const target = targets[index];
     summary.attempted += 1;
 
-    console.log(`[${index + 1}/${targets.length}] Checking ${targetLabel(target)}...`);
+    await emitLog({
+      logger,
+      log,
+      message: `[${index + 1}/${targets.length}] Checking ${targetLabel(target)}...`,
+      data: { index: index + 1, targetCount: targets.length, target },
+    });
 
     try {
-      const catalogResult = await fetchEngineCatalog(target);
+      const catalogResult = await fetchEngineCatalog(target, { logger, log });
       remainingDailyRateLimit = catalogResult.rateLimit?.remainingDaily ?? remainingDailyRateLimit;
 
       if (debug && !debugPrinted) {
@@ -622,7 +680,12 @@ async function main() {
       }
 
       if (catalogResult.notFound) {
-        console.log('  catalog rows: 0; engine rows: 0; inserted: 0; existing: 0; skipped/no catalog: yes');
+        await emitLog({
+          logger,
+          log,
+          message: '  catalog rows: 0; engine rows: 0; inserted: 0; existing: 0; skipped/no catalog: yes',
+          data: { target, catalogRowsFound: 0, engineRowsFound: 0, inserted: 0, existing: 0, skippedNoCatalog: true },
+        });
         summary.noCatalog += 1;
       } else {
         const matchingYearRows = catalogResult.rows.filter((row) => yearRangeIncludes(target.year, row));
@@ -643,9 +706,19 @@ async function main() {
         summary.inserted += insertedCount;
         summary.alreadyExisting += queueRows.length - newRows.length;
 
-        console.log(
-          `  catalog rows: ${catalogResult.rows.length}; engine rows: ${queueRows.length}; inserted: ${insertedCount}${dryRun ? ' (dry run)' : ''}; existing: ${queueRows.length - newRows.length}; skipped/no catalog: no`,
-        );
+        await emitLog({
+          logger,
+          log,
+          message: `  catalog rows: ${catalogResult.rows.length}; engine rows: ${queueRows.length}; inserted: ${insertedCount}${dryRun ? ' (dry run)' : ''}; existing: ${queueRows.length - newRows.length}; skipped/no catalog: no`,
+          data: {
+            target,
+            catalogRowsFound: catalogResult.rows.length,
+            engineRowsFound: queueRows.length,
+            inserted: insertedCount,
+            existing: queueRows.length - newRows.length,
+            dryRun,
+          },
+        });
 
         if (maxQueueRows !== null && !dryRun && rowsToInsert.length < newRows.length) {
           stoppedEarlyReason = `maxQueueRows reached (${maxQueueRows})`;
@@ -655,19 +728,35 @@ async function main() {
 
       const remainingMinute = catalogResult.rateLimit?.remainingMinute;
       if (remainingDailyRateLimit !== null || remainingMinute !== null) {
-        console.log(
-          `  rate limit remaining: daily ${remainingDailyRateLimit ?? 'unknown'}; minute ${remainingMinute ?? 'unknown'}`,
-        );
+        await emitLog({
+          logger,
+          log,
+          message: `  rate limit remaining: daily ${remainingDailyRateLimit ?? 'unknown'}; minute ${remainingMinute ?? 'unknown'}`,
+          data: { remainingDailyRateLimit, remainingMinuteRateLimit: remainingMinute },
+        });
       }
 
       if (remainingDailyRateLimit !== null && remainingDailyRateLimit < LOW_DAILY_RATE_LIMIT_THRESHOLD) {
         stoppedEarlyReason = `remaining daily Open Labor rate limit is below ${LOW_DAILY_RATE_LIMIT_THRESHOLD} (${remainingDailyRateLimit})`;
+        await emitLog({
+          logger,
+          log,
+          level: 'warn',
+          message: `Stopping early: ${stoppedEarlyReason}`,
+          data: { remainingDailyRateLimit, threshold: LOW_DAILY_RATE_LIMIT_THRESHOLD },
+        });
         break;
       }
     } catch (error) {
       summary.failed += 1;
       failedTargets.push({ target, error });
-      console.error(`  failed: ${formatError(error)}`);
+      await emitLog({
+        logger,
+        log,
+        level: 'warn',
+        message: `  failed: ${targetLabel(target)}`,
+        data: { target, error: formatError(error) },
+      });
     }
 
     if (index < targets.length - 1) await sleep(delayMs);
@@ -676,36 +765,100 @@ async function main() {
   const pendingCount = await countPendingQueueRows();
   const statusCounts = await countQueueStatuses();
 
-  console.log('engine batch seed complete');
-  if (stoppedEarlyReason) {
+  const result = {
+    targetsAttempted: summary.attempted,
+    catalogRowsFoundTotal: summary.catalogRowsFound,
+    matchingEngineRowsFoundTotal: summary.matchingEngineRowsFound,
+    queueRowsInserted: summary.inserted,
+    queueRowsAlreadyExisted: summary.alreadyExisting,
+    skippedNoCatalogCount: summary.noCatalog,
+    failedCount: summary.failed,
+    pendingQueueRowsAfterSeeding: pendingCount,
+    remainingDailyRateLimit,
+    stoppedEarly: stoppedEarlyReason,
+    failedTargets: failedTargets.map(({ target, error }) => ({
+      ...target,
+      error: formatError(error),
+    })),
+    queueStatusCounts: statusCounts,
+    plan,
+  };
+
+  await emitLog({ logger, log: false, message: `Targets attempted: ${result.targetsAttempted}`, data: { targetsAttempted: result.targetsAttempted } });
+  await emitLog({ logger, log: false, message: `Catalog rows found total: ${result.catalogRowsFoundTotal}`, data: { catalogRowsFoundTotal: result.catalogRowsFoundTotal } });
+  await emitLog({ logger, log: false, message: `Matching engine rows found total: ${result.matchingEngineRowsFoundTotal}`, data: { matchingEngineRowsFoundTotal: result.matchingEngineRowsFoundTotal } });
+  await emitLog({ logger, log: false, message: `Queue rows inserted: ${result.queueRowsInserted}`, data: { queueRowsInserted: result.queueRowsInserted } });
+  await emitLog({ logger, log: false, message: `Queue rows already existed: ${result.queueRowsAlreadyExisted}`, data: { queueRowsAlreadyExisted: result.queueRowsAlreadyExisted } });
+  await emitLog({ logger, log: false, message: `Skipped/no catalog count: ${result.skippedNoCatalogCount}`, data: { skippedNoCatalogCount: result.skippedNoCatalogCount } });
+  await emitLog({
+    logger,
+    log: false,
+    level: result.failedCount > 0 ? 'warn' : 'info',
+    message: `Failed count: ${result.failedCount}`,
+    data: { failedCount: result.failedCount, failedTargets: result.failedTargets },
+  });
+  await emitLog({ logger, log: false, message: `Pending queue rows after seeding: ${result.pendingQueueRowsAfterSeeding}`, data: { pendingQueueRowsAfterSeeding: result.pendingQueueRowsAfterSeeding } });
+  await emitLog({ logger, log: false, message: `Remaining daily rate limit: ${result.remainingDailyRateLimit ?? 'unknown'}`, data: { remainingDailyRateLimit: result.remainingDailyRateLimit } });
+  if (result.stoppedEarly) {
+    await emitLog({
+      logger,
+      log: false,
+      level: 'warn',
+      message: `Stopped early: ${result.stoppedEarly}`,
+      data: { stoppedEarly: result.stoppedEarly },
+    });
+  }
+
+  await emitLog({
+    logger,
+    log,
+    level: summary.failed > 0 ? 'warn' : 'success',
+    message: 'engine batch seed complete',
+    data: result,
+  });
+
+  if (log && stoppedEarlyReason) {
     console.log(`stopped early: ${stoppedEarlyReason}`);
   }
-  console.log(`targets attempted: ${summary.attempted}`);
-  console.log(`catalog rows found total: ${summary.catalogRowsFound}`);
-  console.log(`matching engine rows found total: ${summary.matchingEngineRowsFound}`);
-  console.log(`queue rows inserted: ${summary.inserted}`);
-  console.log(`queue rows already existed: ${summary.alreadyExisting}`);
-  console.log(`skipped/no catalog count: ${summary.noCatalog}`);
-  console.log(`failed count: ${summary.failed}`);
-  console.log(`pending queue rows after seeding: ${pendingCount}`);
-  console.log('queue status counts:');
-
-  for (const status of Object.keys(statusCounts).sort()) {
-    console.log(`  ${status}: ${statusCounts[status]}`);
+  if (log) {
+    console.log(`targets attempted: ${summary.attempted}`);
+    console.log(`catalog rows found total: ${summary.catalogRowsFound}`);
+    console.log(`matching engine rows found total: ${summary.matchingEngineRowsFound}`);
+    console.log(`queue rows inserted: ${summary.inserted}`);
+    console.log(`queue rows already existed: ${summary.alreadyExisting}`);
+    console.log(`skipped/no catalog count: ${summary.noCatalog}`);
+    console.log(`failed count: ${summary.failed}`);
+    console.log(`pending queue rows after seeding: ${pendingCount}`);
+    console.log('queue status counts:');
   }
 
-  console.log(`remaining daily rate limit: ${remainingDailyRateLimit ?? 'unknown'}`);
+  if (log) {
+    for (const status of Object.keys(statusCounts).sort()) {
+      console.log(`  ${status}: ${statusCounts[status]}`);
+    }
+  }
 
-  if (failedTargets.length > 0) {
+  if (log) console.log(`remaining daily rate limit: ${remainingDailyRateLimit ?? 'unknown'}`);
+
+  if (log && failedTargets.length > 0) {
     console.log('failed targets:');
 
     for (const { target, error } of failedTargets) {
       console.log(`  ${targetLabel(target)}: ${formatError(error)}`);
     }
   }
+
+  return result;
 }
 
-main().catch((error) => {
-  console.error(`Engine batch seed failed:\n${formatError(error)}`);
-  process.exitCode = 1;
-});
+const isDirectExecution = process.argv[1]
+  && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+
+if (isDirectExecution) {
+  const options = parseCliArgs();
+
+  seedOpenLaborEngineBatch(options).catch((error) => {
+    console.error(`Engine batch seed failed:\n${formatError(error)}`);
+    process.exitCode = 1;
+  });
+}
